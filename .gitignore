@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Caches & Temporary Logs
+*.log
+*.stdout.log
+*.stderr.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments & Virtual Envs
+.env
+venv/
+env/
+ENV/
+.venv/
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Large Model Binaries, Weights & Checkpoints (>25MB)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+results_*/
+onnx_edge_models/
+pretrained_models/
+models/
+
+# Large External Raw Datasets & Archives
+data_external/
+data_pilot/
+data_real/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Retain local demo samples & config templates
+!.env.example
+!voice-decision-head-f32.npz
+!scammer_blacklist.json
+!audio_transcripts.json
