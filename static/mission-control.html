@@ -2867,6 +2867,27 @@ html[lang="hi"] #verdict,html[lang="bn"] #verdict,html[lang="hi"] #tr,html[lang=
 .cbar .vl{font-family:var(--font-mono);color:var(--text-primary);text-align:right}
 .theme-scam .cbar .tk>i{background:var(--text-danger)}
 .theme-genuine .cbar .tk>i{background:var(--text-warning)}
+/* ---- observing someone else's call ---- */
+#obsPanel{display:none;flex-direction:column;gap:8px;background:var(--surface-2);border:0.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px}
+#obsPanel.on{display:flex}
+#obsAuth{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#obsPin{width:150px}
+#obsMsg{font-size:12px;color:var(--text-muted);line-height:1.5}
+#obsMsg.bad{color:var(--text-danger)}
+#obsList{display:flex;flex-direction:column;gap:6px}
+.obs-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;text-align:left;width:100%;font-size:12px;background:var(--surface-1);border:0.5px solid var(--border);border-radius:var(--radius);padding:8px 10px;cursor:pointer;color:var(--text-primary)}
+.obs-row:hover,.obs-row:focus-visible{border-color:var(--text-accent);outline:none}
+.obs-row .who{font-family:var(--font-mono);font-size:13px;color:var(--text-primary)}
+.obs-row .meta{color:var(--text-secondary);margin-top:2px;display:block;line-height:1.5}
+/* An operator must never mistake a real person's call for a replay. */
+#obsBanner{display:none;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:600;border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;background:var(--bg-accent);border:1px solid var(--border-accent);color:var(--text-accent)}
+#obsBanner.on{display:flex}
+#obsBanner i{font-size:18px;flex:none}
+#obsBanner .who{font-family:var(--font-mono);font-weight:400;color:var(--text-primary)}
+#obsBanner.ended{background:var(--surface-2);border-color:var(--border-strong);color:var(--text-secondary)}
+@media (prefers-reduced-motion:no-preference){#obsBanner:not(.ended) i{animation:bl 1.2s infinite}}
+html[lang="hi"] #obsBanner,html[lang="bn"] #obsBanner,html[lang="hi"] .obs-row,html[lang="bn"] .obs-row{line-height:1.8}
+
 /* ---- demo-mode provenance: the acoustic pillar may be an untrained stub ---- */
 #demoBadge{display:none;align-items:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:.02em;padding:3px 9px;border-radius:999px;background:var(--bg-danger);border:1px solid var(--border-danger);color:var(--text-danger)}
 #demoBadge.on{display:inline-flex}
@@ -2901,9 +2922,16 @@ html[lang="hi"] #demoNote,html[lang="bn"] #demoNote{line-height:1.85}
 <button onclick="startReplay()" id="runBtn">Run</button>
 <button onclick="runPreset('scam')">Run scam call</button><button onclick="runPreset('genuine')">Run genuine call</button>
 <button onclick="toggleLive()" id="micBtn">Live mic</button>
+<button onclick="toggleObserve()" id="observeBtn">Observe a live call</button>
 <button onclick="toggleTheme()" id="themeBtn" title="Toggle Light/Dark Mode"><i class="ti ti-moon" id="themeIcon" aria-hidden="true"></i></button>
 </div>
 <div id="drop" tabindex="0" role="button"><i class="ti ti-upload" aria-hidden="true"></i><span id="lblUpload">Drop an audio file</span><span style="flex:1"></span><span id="dropState" style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)"></span><input id="fileInput" type="file" accept="audio/*" style="display:none"></div>
+<div id="obsPanel">
+<div id="obsAuth"><label class="sr-only" for="obsPin">Control PIN</label><input class="ctl" id="obsPin" type="password" autocomplete="off" placeholder="Control PIN"><button onclick="refreshSessions()" id="obsRefreshBtn">Observe a live call</button></div>
+<div id="obsMsg"></div>
+<div id="obsList"></div>
+</div>
+<div id="obsBanner"><i class="ti ti-eye" aria-hidden="true"></i><span id="obsBannerT">Watching someone else's call</span><span class="who" id="obsWho"></span><span style="flex:1"></span><button onclick="stopObserving('stopped')" id="obsStopBtn">Stop watching</button></div>
 <div id="cb"><i class="ti ti-lock-cancel" aria-hidden="true"></i><span id="lblBreaker">Banking and UPI locked</span><span class="sub" id="cbSub"></span></div>
 <div id="demoNote"><i class="ti ti-alert-triangle" aria-hidden="true"></i><span><b id="demoNoteT">DEMO — not a real detector</b> <span id="demoNoteB">Voice scores come from an untrained stub. Scam-stage detection is real.</span></span></div>
 <div class="metrics-grid">
@@ -3142,7 +3170,14 @@ const I18N = {
     voip: 'VoIP spoofed',
     upload: 'Drop an audio file',
     demoBadge: 'DEMO — not a real detector',
-    demoBody: 'Voice scores come from an untrained stub. Scam-stage detection is real.'
+    demoBody: 'Voice scores come from an untrained stub. Scam-stage detection is real.',
+    observe: 'Observe a live call',
+    observing: "Watching someone else's call",
+    stopWatching: 'Stop watching',
+    noCalls: 'No calls in progress',
+    pinPrompt: 'Control PIN',
+    pinWrong: 'Wrong control PIN',
+    pinMissing: 'Server has no control PIN configured'
   },
   hi: {
     title: 'वाणीशील्ड मिशन कंट्रोल',
@@ -3163,7 +3198,14 @@ const I18N = {
     voip: 'वीओआईपी स्पूफ्ड',
     upload: 'ऑडियो फ़ाइल डालें',
     demoBadge: 'डेमो — असली डिटेक्टर नहीं',
-    demoBody: 'आवाज़ का स्कोर एक अप्रशिक्षित स्टब से आ रहा है। धोखाधड़ी के चरणों की पहचान असली है।'
+    demoBody: 'आवाज़ का स्कोर एक अप्रशिक्षित स्टब से आ रहा है। धोखाधड़ी के चरणों की पहचान असली है।',
+    observe: 'लाइव कॉल देखें',
+    observing: 'किसी और की कॉल देखी जा रही है',
+    stopWatching: 'देखना बंद करें',
+    noCalls: 'कोई कॉल नहीं चल रही',
+    pinPrompt: 'कंट्रोल पिन',
+    pinWrong: 'ग़लत कंट्रोल पिन',
+    pinMissing: 'सर्वर पर कंट्रोल पिन सेट नहीं है'
   },
   bn: {
     title: 'ভানীশील্ড মিশন কন্ট্রোল',
@@ -3184,7 +3226,14 @@ const I18N = {
     voip: 'ভিওআইপি স্পুফড',
     upload: 'অডিও ফাইল দিন',
     demoBadge: 'ডেমো — আসল ডিটেক্টর নয়',
-    demoBody: 'কণ্ঠস্বরের স্কোর একটি অপ্রশিক্ষিত স্টাব থেকে আসছে। প্রতারণার ধাপ শনাক্তকরণ আসল।'
+    demoBody: 'কণ্ঠস্বরের স্কোর একটি অপ্রশিক্ষিত স্টাব থেকে আসছে। প্রতারণার ধাপ শনাক্তকরণ আসল।',
+    observe: 'লাইভ কল দেখুন',
+    observing: 'অন্য কারও কল দেখা হচ্ছে',
+    stopWatching: 'দেখা বন্ধ করুন',
+    noCalls: 'কোনো কল চলছে না',
+    pinPrompt: 'কন্ট্রোল পিন',
+    pinWrong: 'ভুল কন্ট্রোল পিন',
+    pinMissing: 'সার্ভারে কন্ট্রোল পিন সেট নেই'
   }
 };
 let uiLang = 'en';
@@ -3249,6 +3298,16 @@ function paintChrome() {
   setText('demoBadgeT', T('demoBadge'));
   setText('demoNoteT', T('demoBadge'));
   setText('demoNoteB', T('demoBody'));
+  setText('observeBtn', observing ? T('stopWatching') : T('observe'));
+  setText('obsRefreshBtn', T('observe'));
+  setText('obsStopBtn', T('stopWatching'));
+  setText('obsBannerT', T('observing'));
+  const pinEl = $('obsPin'); if (pinEl) pinEl.placeholder = T('pinPrompt');
+  const obsMsgEl = $('obsMsg');
+  if ($('obsPanel') && $('obsPanel').classList.contains('on') && !sessionRows.length
+      && obsMsgEl && obsMsgEl.className !== 'bad') {
+    setObsMsg(T('noCalls'), false);
+  }
   // the placeholder in the transcript panel, when nothing has been said yet
   const tr = $('tr');
   if (tr && tr.getAttribute('data-empty') === '1') paintWaiting();
@@ -3812,6 +3871,12 @@ function applyFrame(f) {
    ------------------------------------------------------------------------- */
 function closeSockets(reason) {
   if (micActive) teardownMic();
+  if (observing) {
+    observing = null;
+    hideObsBanner();
+    setText('observeBtn', T('observe'));
+  }
+  closeObservePicker();   // stop polling /api/sessions behind another session
   const s = sock;
   sock = null; sockKind = null;
   if (s) {
@@ -4189,6 +4254,217 @@ function stopLive(reason) {
   stopClock();
   setLive('idle', '');
   logLine(sec, 'Live monitoring ' + (reason || 'stopped'), 'info');
+}
+
+/* -------------------------------------------------------------------------
+   Observing a call in progress on someone else's screen.
+
+   This is read-only by contract: the socket accepts no control messages, so
+   there is no block / end / set-caller affordance here. The PIN lives in this
+   variable and nowhere else — never localStorage, never a URL, never a log.
+   ------------------------------------------------------------------------- */
+let controlPin = '';
+let observing = null;        // {session_id, caller_masked} while watching
+let sessionRows = [];        // last /api/sessions payload
+let obsPoll = null;          // picker refresh interval
+
+function setObsMsg(text, bad) {
+  const el = $('obsMsg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = bad ? 'bad' : '';
+}
+
+function showObsBanner(session, ended) {
+  const b = $('obsBanner');
+  if (!b) return;
+  b.className = 'on' + (ended ? ' ended' : '');
+  setText('obsBannerT', T('observing'));
+  setText('obsWho', (session && str(session.caller_masked)) || (session && str(session.session_id)) || '');
+}
+function hideObsBanner() {
+  const b = $('obsBanner');
+  if (b) b.className = '';
+  setText('obsWho', '');
+}
+
+function openObservePicker() {
+  const panel = $('obsPanel');
+  if (panel) panel.classList.add('on');
+  setObsMsg('', false);
+  const pin = $('obsPin');
+  if (pin && !str(pin.value) && !controlPin) { try { pin.focus(); } catch (e) { /* ignore */ } }
+  refreshSessions();
+  clearInterval(obsPoll);
+  obsPoll = setInterval(() => { if (controlPin) refreshSessions(); }, 5000);
+}
+function closeObservePicker() {
+  const panel = $('obsPanel');
+  if (panel) panel.classList.remove('on');
+  clearInterval(obsPoll);
+  obsPoll = null;
+}
+
+function toggleObserve() {
+  if (observing) { stopObserving('stopped'); return; }
+  const panel = $('obsPanel');
+  if (panel && panel.classList.contains('on')) closeObservePicker();
+  else openObservePicker();
+}
+
+async function refreshSessions() {
+  const field = $('obsPin');
+  const typed = field ? str(field.value).trim() : '';
+  if (typed) { controlPin = typed; field.value = ''; }   // keep it out of the DOM
+  if (!controlPin) { setObsMsg(T('pinPrompt'), false); return; }
+
+  let res;
+  try {
+    res = await fetch(API_BASE + '/api/sessions', {
+      headers: { 'Accept': 'application/json', 'X-VaniShield-Pin': controlPin }
+    });
+  } catch (err) {
+    setObsMsg('' + (err && err.message || 'network error'), true);
+    return;
+  }
+  if (res.status === 403) { controlPin = ''; setObsMsg(T('pinWrong'), true); renderSessions([]); return; }
+  if (res.status === 503) { setObsMsg(T('pinMissing'), true); renderSessions([]); return; }
+  if (!res.ok) { setObsMsg('HTTP ' + res.status, true); return; }
+
+  let data = null;
+  try { data = await res.json(); } catch (err) { setObsMsg('malformed session list', true); return; }
+  const list = (data && Array.isArray(data.sessions)) ? data.sessions : [];
+  renderSessions(list);
+  setObsMsg(list.length ? '' : T('noCalls'), false);
+}
+
+function renderSessions(list) {
+  sessionRows = Array.isArray(list) ? list : [];
+  const box = $('obsList');
+  if (!box) return;
+  box.innerHTML = '';
+  // The message line belongs to the caller: an auth error must not be
+  // overwritten by "no calls in progress".
+  if (!sessionRows.length) return;
+  sessionRows.forEach(s => {
+    if (!s || typeof s !== 'object') return;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'obs-row';
+    const left = document.createElement('span');
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = str(s.caller_masked) || str(s.session_id) || '—';
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const stages = Array.isArray(s.stages) ? s.stages.length : 0;
+    meta.textContent = [
+      mmss(num(s.elapsed_sec, 0)),
+      str(s.lang) || '—',
+      stages + '/' + stageTotal(),
+      str(s.call_state) || '—',
+      'observers ' + num(s.observers, 0)
+    ].join(' · ');
+    left.appendChild(who); left.appendChild(meta);
+    const go = document.createElement('span');
+    go.className = 'tag';
+    go.textContent = T('observe');
+    row.appendChild(left); row.appendChild(go);
+    row.addEventListener('click', () => startObserving(s));
+    box.appendChild(row);
+  });
+}
+
+function startObserving(session) {
+  const id = session && str(session.session_id);
+  if (!id) return;
+  if (!controlPin) { setObsMsg(T('pinPrompt'), true); return; }
+  closeSockets('starting observation');
+  reset();
+  closeObservePicker();
+
+  let s;
+  try {
+    s = new WebSocket(wsUrl('/ws/observe/' + encodeURIComponent(id)));
+  } catch (err) {
+    logLine(0, 'Could not open observe socket · ' + (err && err.message || 'error'), 'danger');
+    setLive('idle', '');
+    return;
+  }
+  sock = s; sockKind = 'observe';
+  observing = { session_id: id, caller_masked: str(session.caller_masked) };
+  showObsBanner(observing, false);
+  setText('observeBtn', T('stopWatching'));
+  setText('sesId', id);
+  setLive('busy', 'observe');
+
+  s.onopen = () => {
+    // The PIN goes in the first message, deliberately not the URL.
+    try { s.send(JSON.stringify({ pin: controlPin })); }
+    catch (err) { logLine(0, 'Could not authenticate observer', 'danger'); }
+  };
+  s.onmessage = ev => {
+    let frame = null;
+    try { frame = JSON.parse(ev.data); } catch (err) {
+      logLine(sec, 'Malformed frame from observe socket', 'warning');
+      return;
+    }
+    if (!frame || typeof frame !== 'object') return;
+    if (str(frame.status) === 'observing') {
+      setLive('live', 'observe');
+      startClock();
+      logLine(0, 'Observing call ' + (observing.caller_masked || id), 'accent');
+      return;
+    }
+    if (str(frame.status) === 'error' && !frame.fusion) {
+      logLine(sec, 'Observer rejected · ' + (str(frame.error) || 'unknown'), 'danger');
+      return;
+    }
+    applyFrame(frame);
+    if (str(frame.call_state) === 'ENDED') {
+      // Hold the final verdict on screen; only the live state goes idle.
+      logLine(num(frame.elapsed_sec, sec), 'Call ended', 'info');
+      stopClock();
+      setLive('idle', 'ended');
+      showObsBanner(observing, true);
+    }
+  };
+  s.onerror = () => { logLine(sec, 'Observe socket error', 'danger'); };
+  s.onclose = ev => {
+    if (sock === s) { sock = null; sockKind = null; }
+    stopClock();
+    setLive('idle', '');
+    const code = ev && ev.code;
+    let why =
+      code === 4401 ? 'observer authentication missing or malformed' :
+      code === 4403 ? T('pinWrong') :
+      code === 4404 ? 'that call has ended' : closeReason(ev);
+    if (code === 4403) controlPin = '';
+    logLine(sec, 'Observe socket closed' + (why ? ' · ' + why : ''),
+      (code === 4401 || code === 4403 || code === 4404) ? 'danger' : 'info');
+    // Panels keep the last frame; only the banner changes to its ended state.
+    // If we never got a frame there was nothing to watch, so say nothing.
+    if (observing && framesSeen > 0) showObsBanner(observing, true);
+    else { observing = null; hideObsBanner(); }
+    setText('observeBtn', T('observe'));
+    if (code === 4403 || code === 4401) { setObsMsg(why, true); openObservePicker(); }
+  };
+}
+
+function stopObserving(reason) {
+  const s = sock;
+  if (s && sockKind === 'observe') {
+    try { s.onmessage = null; s.onerror = null; s.onclose = null; } catch (e) { /* detached */ }
+    try { s.close(1000, 'client'); } catch (e) { /* already closing */ }
+    logLine(sec, 'Stopped watching · ' + (reason || 'stopped'), 'info');
+  }
+  sock = null; sockKind = null;
+  observing = null;
+  hideObsBanner();
+  setText('observeBtn', T('observe'));
+  clearTimers();
+  stopClock();
+  setLive('idle', '');
 }
 
 /* -------------------------------------------------------------------------
