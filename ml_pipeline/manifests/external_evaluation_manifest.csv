@@ -1,0 +1,2 @@
+path,label,source,speaker_id,language,split,notes
+C:\Users\souna\Desktop\test 1.m4a,0,user_verified_real_m4a,user_verified_001,en,external_test,Verified real voice; never include in training or threshold selection.
