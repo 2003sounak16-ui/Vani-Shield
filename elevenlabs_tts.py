@@ -98,6 +98,9 @@ def synthesize_speech_elevenlabs(
     if not text or not text.strip():
         return b"", {}, "Text input for synthesis cannot be empty."
 
+    if len(text.strip()) > 500:
+        return b"", {}, "Text exceeds maximum permitted length (500 characters)."
+
     url = f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
     params = {"output_format": output_format}
     headers = {
