@@ -1,0 +1,65 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "app",
+          "format": "url",
+          "env": "BACKEND_URL"
+        }
+      ]
+    },
+    "app": {
+      "root": ".",
+      "framework": "fastapi"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/health",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/docs",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/openapi.json",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/ws/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/static/(.*)",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
+    }
+  ]
+}
