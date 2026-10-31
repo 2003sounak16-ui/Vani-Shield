@@ -833,6 +833,11 @@ async def get_stage_metadata(lang: str = "en"):
 # -------------------------------------------------------------
 OBSERVER_AUTH_TIMEOUT_SECONDS = 5.0
 
+# Session id prefixes. Only live calls are observable; a replay is a fixture
+# being scored, not a person on a phone.
+LIVE_SESSION_PREFIX = "call_"
+REPLAY_SESSION_PREFIX = "replay_"
+
 _observers: Dict[str, set] = {}
 _observers_lock = asyncio.Lock()
 
@@ -1117,8 +1122,18 @@ async def list_active_sessions(pin: Optional[str] = Header(None, alias=CONTROL_P
     the full number to work.
     """
     require_control_pin(pin)
+
+    # Drop sessions whose socket went away without an END_CALL, so the picker
+    # cannot offer a call that is no longer happening.
+    session_registry.reap_idle()
+
     sessions = []
     for session in session_registry.all():
+        # Replays are fixtures, not calls. Listing them here would present a
+        # demo as someone else's live call - the precise confusion the
+        # observing banner exists to prevent, reintroduced one layer down.
+        if not session.session_id.startswith(LIVE_SESSION_PREFIX):
+            continue
         phone = session.phone_number or ""
         digits = "".join(ch for ch in phone if ch.isdigit())
         sessions.append({
@@ -1163,16 +1178,22 @@ async def observe_session_websocket(websocket: WebSocket, session_id: str):
             await websocket.close(code=4403)
         return
 
-    if session_registry.get(session_id) is None:
+    if session_registry.get(session_id) is None or not session_id.startswith(LIVE_SESSION_PREFIX):
+        # Same answer for "ended", "never existed" and "is a replay", so the
+        # endpoint does not confirm which to an unauthorised guess.
         await websocket.send_json({"status": "error", "error": f"No active session '{session_id}'."})
         await websocket.close(code=4404)
         return
 
     await _register_observer(session_id, websocket)
     logger.info(f"Observer attached to session {session_id}.")
-    await websocket.send_json({"status": "observing", "session_id": session_id})
 
+    # The acknowledgement is inside the try, not before it: registration has
+    # already happened, so a send that fails here must still reach the finally
+    # and unregister. Otherwise a dead socket lingers in the fan-out set until
+    # some later publish happens to prune it.
     try:
+        await websocket.send_json({"status": "observing", "session_id": session_id})
         # Stay open until the observer leaves. Anything it sends is ignored:
         # observers watch, they do not steer.
         while True:
