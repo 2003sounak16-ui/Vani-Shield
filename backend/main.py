@@ -29,22 +29,21 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Enforce secure CORS allowlist (Issue #9)
-configured_origins = os.environ.get("VANISHIELD_ALLOWED_ORIGINS", "").split(",")
-allowed_origins = [orig.strip() for orig in configured_origins if orig.strip()] or [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+# Enforce secure CORS allowlist (Issue #9 & Cloud Deployments)
+configured_origins = os.environ.get("VANISHIELD_ALLOWED_ORIGINS", "").strip()
+if configured_origins and configured_origins != "*":
+    allowed_origins = [orig.strip() for orig in configured_origins.split(",") if orig.strip()]
+    allow_credentials = True
+else:
+    # Allow all origins for seamless cloud PaaS deployments
+    allowed_origins = ["*"]
+    allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_credentials=allow_credentials,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -116,6 +115,22 @@ STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# Mount React UI if built
+FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
+if os.path.exists(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="react-assets")
+
+    @app.get("/react", response_class=HTMLResponse)
+    async def serve_react_dashboard():
+        react_index = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.exists(react_index):
+            with open(react_index, "r", encoding="utf-8") as f:
+                return f.read()
+        return "<h1>React Dashboard Not Found</h1>"
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False)
+    server_port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=server_port, reload=False)

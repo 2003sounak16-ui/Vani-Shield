@@ -39,21 +39,24 @@ faiss-cpu>=1.8.0
 soundfile>=0.12.1
 librosa>=0.10.2
 praat-parselmouth>=0.4.3
+av>=11.0.0
 
 # --- Pillar 5: Telecom Intelligence & Geolocation ---
 phonenumbers>=8.13.0
 requests>=2.31.0
+httpx>=0.27.0
 beautifulsoup4>=4.12.0
 
 # --- Pillar 6: Streaming Backend, Production ASGI Server & Privacy Layer ---
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
-gunicorn>=21.2.0
+gunicorn>=21.2.0; sys_platform != 'win32'
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
 websockets>=12.0
 pydantic>=2.7.0
 redis>=5.0.0
+psutil>=5.9.0
 
 # --- Pillar 7 & Utilities: Synthetic Voice Generation (TTS) & Data Science ---
 # ElevenLabs API communicates via direct REST endpoints with custom voice IDs
@@ -64,3 +67,4 @@ scipy>=1.12.0
 scikit-learn>=1.4.0
 sounddevice>=0.4.6; sys_platform == 'win32' or sys_platform == 'darwin'
 pandas>=2.2.0
+tqdm>=4.66.0
