@@ -94,16 +94,16 @@ def main():
         fe = AutoFeatureExtractor.from_pretrained("facebook/wav2vec2-base")
         model = UnifiedJevOmniVoiceNet().to(device)
 
-        # Load training audio files from data_pilot (or data_demo if present)
-        real_files = sorted(glob.glob("data_pilot/pilot_real_*.wav") + glob.glob("data_demo/real/*.wav"))
-        fake_files = sorted(glob.glob("data_pilot/pilot_fake_*.wav") + glob.glob("data_demo/fake/*.wav"))
+        # Load training audio files from demo_samples, data_pilot, or data_demo
+        real_files = sorted(glob.glob("demo_samples/real/*.wav") + glob.glob("data_pilot/pilot_real_*.wav") + glob.glob("data_demo/real/*.wav"))
+        fake_files = sorted(glob.glob("demo_samples/fake/*.wav") + glob.glob("data_pilot/pilot_fake_*.wav") + glob.glob("data_demo/fake/*.wav"))
 
         dataset = []
         for f in real_files:
-            prompt = f"Audio file: {os.path.basename(f)}. Context: Normal genuine human phone call. Question: Is this voice real or fake? Options: real fake"
+            prompt = "Assess phone call audio and conversational context for potential spoofing."
             dataset.append((f, prompt, 0))
         for f in fake_files:
-            prompt = f"Audio file: {os.path.basename(f)}. Context: Urgent caller asking for bank OTP and account details. Question: Is this voice real or fake? Options: real fake"
+            prompt = "Assess phone call audio and conversational context for potential spoofing."
             dataset.append((f, prompt, 1))
 
         print(f"Preparing {len(dataset)} joint (Audio + Jev-Omni 3840-d) training samples...")
@@ -144,7 +144,9 @@ def main():
             head_out,
             mu=mu, sd=sd,
             W=model.jev_head.weight.detach().cpu().numpy(),
-            b=model.jev_head.bias.detach().cpu().numpy()
+            b=model.jev_head.bias.detach().cpu().numpy(),
+            norm_weight=model.jev_norm.weight.detach().cpu().numpy(),
+            norm_bias=model.jev_norm.bias.detach().cpu().numpy()
         )
         print(f"\n[SUCCESS] Saved unified model -> {model_out}")
         print(f"[SUCCESS] Saved Jev-Omni head -> {head_out}")

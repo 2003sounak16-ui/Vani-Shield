@@ -106,10 +106,10 @@ def main():
 
         dataset = []
         for f, ctx in zip(real_files, real_contexts):
-            prompt = f"Audio file: {os.path.basename(f)}. Context: {ctx} Question: Is this voice real or fake? Options: real fake"
+            prompt = f"Transcript: {ctx}. Assess acoustic tone and conversational context."
             dataset.append((f, prompt, 0, ctx))
         for f, _, ctx in scams:
-            prompt = f"Audio file: {os.path.basename(f)}. Context: {ctx} Question: Is this voice real or fake? Options: real fake"
+            prompt = f"Transcript: {ctx}. Assess acoustic tone and conversational context."
             dataset.append((f, prompt, 1, ctx))
 
         print(f"\nExtracting features for {len(dataset)} samples (Real vs. Neural TTS Scam)...")

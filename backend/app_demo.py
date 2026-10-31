@@ -761,7 +761,7 @@ async def live_call_websocket(websocket: WebSocket):
 
                         caller_phone = str(new_phone).strip()
 
-                        logger.info(f"Session {session_id} updated caller ID to: {caller_phone}")
+                        logger.info(f"Session {session_id} updated caller hash: {hash_caller_identity(caller_phone)}")
 
                 elif action == "END_CALL":
 
@@ -904,10 +904,11 @@ async def tts_synthesize(req: SynthesizeRequest):
     cleaned_text = req.text.strip()
     if not cleaned_text:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
-    if len(cleaned_text) > 500:
-        raise HTTPException(status_code=400, detail="Text length exceeds maximum allowed limit of 500 characters.")
+    if len(cleaned_text) > 1000:
+        raise HTTPException(status_code=413, detail="Payload Too Large: Text exceeds maximum limit of 1000 characters.")
 
-    audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+    async with UPLOAD_SEMAPHORE:
+        audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
 
     if err and not audio_bytes:
 
@@ -946,10 +947,11 @@ async def tts_simulate_attack(req: SynthesizeRequest):
     cleaned_text = req.text.strip()
     if not cleaned_text:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
-    if len(cleaned_text) > 500:
-        raise HTTPException(status_code=400, detail="Text length exceeds maximum allowed limit of 500 characters.")
+    if len(cleaned_text) > 1000:
+        raise HTTPException(status_code=413, detail="Payload Too Large: Text exceeds maximum limit of 1000 characters.")
 
-    audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+    async with UPLOAD_SEMAPHORE:
+        audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
 
     if err and not audio_bytes:
 

@@ -39,9 +39,14 @@ REGIONAL_NODES = {
 }
 
 def hash_caller_identity(phone_number: str) -> str:
-    """DPDP Act 2023 compliant HMAC/SHA256 caller identity anonymizer."""
-    salt = os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt")
-    return hashlib.sha256(f"{salt}:{phone_number}".encode("utf-8")).hexdigest()[:16]
+    """DPDP Act 2023 compliant keyed HMAC-SHA256 caller identity anonymizer."""
+    if not phone_number:
+        return "ANONYMOUS"
+    import hmac
+    clean = "".join(filter(str.isalnum, phone_number))
+    _secret = os.environ.get("VANISHIELD_HMAC_SECRET", os.environ.get("VANISHIELD_SALT", "vanishield_dpdp_secret_salt_2026"))
+    secret_bytes = _secret.encode("utf-8") if isinstance(_secret, str) else _secret
+    return hmac.new(secret_bytes, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 def lookup_carrier(phone_number: str) -> dict:
     """Extract carrier, geo-region, and valid telecom status from a phone number."""
@@ -150,7 +155,9 @@ def mark_scammer(phone_number: str, risk_score: float, reason: str, metadata: di
             except Exception:
                 data = {}
 
-        data[phone_number] = record
+        caller_hash = hash_caller_identity(phone_number)
+        record["masked_number"] = phone_number[:3] + "****" + phone_number[-4:] if len(phone_number) > 7 else "****"
+        data[caller_hash] = record
 
         tmp_path = f"{BLACKLIST_PATH}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -160,11 +167,13 @@ def mark_scammer(phone_number: str, risk_score: float, reason: str, metadata: di
     return record
 
 def is_blacklisted(phone_number: str):
-    """Check if caller is marked as a scammer."""
+    """Check if caller is marked as a scammer by hash or number."""
     blacklist = load_blacklist()
+    caller_hash = hash_caller_identity(phone_number)
+    if caller_hash in blacklist:
+        return True, blacklist[caller_hash]
     if phone_number in blacklist:
         return True, blacklist[phone_number]
-    caller_hash = hash_caller_identity(phone_number)
     for num, entry in blacklist.items():
         if entry.get("caller_hash") == caller_hash:
             return True, entry

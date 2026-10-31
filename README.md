@@ -93,6 +93,12 @@ python check_env.py
   --port 9931
 ```
 
+### 2b. Install Project Dependencies
+```powershell
+pip install -r requirements.txt
+cd frontend && npm install && cd ..
+```
+
 ### 3. Launch FastAPI Streaming Backend (Port 8000)
 ```powershell
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
@@ -133,8 +139,8 @@ python caller_tracker.py --list
 
 ## 🔒 India DPDP Act 2023 Compliance
 - **Zero Raw Audio on Disk**: Audio payloads stream entirely inside volatile in-memory ring buffers (`EphemeralRAMBuffer`).
-- **4-Second Eviction SLA**: Unprocessed or evaluated speech segments automatically expire from memory.
-- **HMAC Pseudonymization**: Caller phone numbers are securely hashed with SHA256 before blacklisting.
+- **Configured Volatile Retention**: Audio payloads are retained strictly in a sliding in-memory ring buffer (~3.5–4.0s) and automatically purged without persistent disk retention.
+- **HMAC-SHA256 Pseudonymization**: Caller phone numbers are securely hashed using keyed HMAC-SHA256 before blacklisting.
 
 ---
 

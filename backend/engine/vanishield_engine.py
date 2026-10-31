@@ -811,7 +811,12 @@ class VaniShieldCore:
 
 
 
-        is_blacklisted = clean_key in self.blacklist
+        try:
+            from backend.engine.ephemeral_buffer import hash_caller_identity
+        except ImportError:
+            from ephemeral_buffer import hash_caller_identity
+        caller_hash_lookup = hash_caller_identity(clean_key)
+        is_blacklisted = (clean_key in self.blacklist) or (caller_hash_lookup in self.blacklist)
 
         is_voip_spoofed = (
 
@@ -1011,6 +1016,11 @@ class VaniShieldCore:
 
 
 
+        if len(audio_chunk_16k) > window_size:
+            tail_clip = audio_chunk_16k[-window_size:]
+            if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
+                clips.append(tail_clip)
+
         if not clips:
 
             clip = audio_chunk_16k[:window_size]
@@ -1065,7 +1075,7 @@ class VaniShieldCore:
 
             is_final_window_click = (
 
-                n_win > 2
+                n_win >= 2
 
                 and window_probs[-1] >= 60.0
 
@@ -1095,9 +1105,11 @@ class VaniShieldCore:
 
                 n_win >= 1
 
+                and not is_final_window_click
+
                 and (window_probs[0] >= 65.0 or (n_win >= 2 and max(window_probs[:2]) >= 65.0))
 
-                and (spec_flatness >= 0.010 or spec_cent >= 1350.0 or n_win <= 4)
+                and (spec_flatness >= 0.010 or spec_cent >= 1350.0)
 
             )
 
@@ -1509,7 +1521,8 @@ class VaniShieldCore:
 
             with _blacklist_lock:
 
-                self.blacklist[clean_key] = entry
+                if caller_hash not in self.blacklist and clean_key not in self.blacklist:
+                    self.blacklist[caller_hash] = entry
 
                 try:
 

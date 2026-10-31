@@ -40,6 +40,13 @@ python check_env.py
 ## 3. Starting the Platform Services
 
 ### Terminal 1: Launch Jev-Omni 12B Intent Server (Port 9931)
+> **Setup Note**:
+> 1. Install llama.cpp server using Windows Package Manager:
+>    ```powershell
+>    winget install ggml.llamacpp
+>    ```
+> 2. Download the Jev-Omni GGUF models (`Jev-Omni-Unified-Q4_K_M.gguf` and `mmproj-jev-omni.gguf`) into `C:\AI\Models\Jev-Omni\`. If placing in another directory, adjust the `--model` and `--mmproj` arguments accordingly.
+
 ```powershell
 & "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\llama-server.exe" `
   --model "C:\AI\Models\Jev-Omni\Jev-Omni-Unified-Q4_K_M.gguf" `

@@ -130,7 +130,15 @@ async def websocket_live_call(websocket: WebSocket):
                     await asyncio.sleep(1.2)
 
             elif action == "PUSH_PCM_CHUNK":
-                # Raw audio chunk push
+                # Decode and store incoming PCM data before ACK
+                chunk_data = msg.get("pcm_base64") or msg.get("chunk") or msg.get("pcm")
+                if chunk_data and isinstance(chunk_data, str):
+                    try:
+                        import base64
+                        raw_bytes = base64.b64decode(chunk_data)
+                        ephemeral_buffer.push_chunk(session_id, raw_bytes)
+                    except Exception:
+                        pass
                 await websocket.send_text(json.dumps({
                     "type": "CHUNK_ACK",
                     "session_id": session_id,
