@@ -20,7 +20,11 @@ try:
 except ImportError:
     PHONENUMBERS_AVAILABLE = False
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+if os.path.basename(_curr_dir) == "engine":
+    PROJECT_ROOT = os.path.abspath(os.path.join(_curr_dir, "..", ".."))
+else:
+    PROJECT_ROOT = _curr_dir
 BLACKLIST_PATH = os.environ.get("VANISHIELD_BLACKLIST", os.path.join(PROJECT_ROOT, "scammer_blacklist.json"))
 _blacklist_lock = threading.Lock()
 

@@ -4,6 +4,7 @@ import unittest
 import numpy as np
 import pandas as pd
 import time
+from unittest.mock import MagicMock
 
 # Ensure repo root is on sys.path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -46,9 +47,6 @@ class TestVaniShieldFixes(unittest.TestCase):
 
     def test_build_robust_manifest_connected_components(self):
         """Verify that rows sharing either a speaker or a source never cross splits."""
-        # Source 1 has speakers S1 and S2
-        # Source 2 has speakers S2 and S3 (connected via S2)
-        # Source 3 has speaker S4 (independent)
         data = {
             "path": [f"audio_{i}.wav" for i in range(7)],
             "label": [0, 0, 1, 1, 0, 1, 0],
@@ -63,7 +61,6 @@ class TestVaniShieldFixes(unittest.TestCase):
         train_speakers = set(split_df[split_df["split"] == "train"]["speaker_id"])
         val_speakers = set(split_df[split_df["split"] == "val"]["speaker_id"])
 
-        # No overlap between train and val sources or speakers
         self.assertEqual(train_sources.intersection(val_sources), set(), "Source leaked between train and val!")
         self.assertEqual(train_speakers.intersection(val_speakers), set(), "Speaker leaked between train and val!")
 
@@ -122,7 +119,7 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertFalse(is_aware_3, "Tricky scam with real demand must NOT be exempted")
 
     def test_decision_head_file_integrity(self):
-        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd."""
+        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd, norm_w, norm_b."""
         head_path = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "ml_pipeline", "checkpoints", "voice-decision-head-f32.npz"))
         if not os.path.exists(head_path):
             head_path = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
@@ -132,30 +129,49 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertIn("b", data)
         self.assertIn("mu", data)
         self.assertIn("sd", data)
+        self.assertIn("norm_w", data)
+        self.assertIn("norm_b", data)
         self.assertEqual(data["W"].shape, (2, 3840))
         self.assertEqual(data["b"].shape, (2,))
+        self.assertEqual(data["norm_w"].shape, (3840,))
+        self.assertEqual(data["norm_b"].shape, (3840,))
 
     def test_transcription_failure_status(self):
-        """Verify that when transcription fails, the verdict is incomplete_analysis rather than safe."""
-        transcription_err = "ASR model timeout"
-        known_transcript = None
-        transcription_failed = bool(transcription_err and not known_transcript)
-        analysis_status = "incomplete_analysis" if transcription_failed else "success"
-        w2v_p = 0.0
-        has_audible_speech = False
+        """Verify that when transcription fails, evaluate_live_call produces incomplete_analysis rather than safe."""
+        from vanishield_engine import VaniShieldCore
 
-        if transcription_failed:
-            final_risk = round(max(w2v_p, 45.0 if has_audible_speech else 20.0), 1)
-            threat_type = "UNVERIFIED_TRANSCRIPTION_FAILED"
-        else:
-            threat_type = "AUTHENTIC_SAFE_CALL"
+        # Instantiate engine object without triggering heavyweight CUDA/HF model loads
+        engine = VaniShieldCore.__new__(VaniShieldCore)
+        engine.device = "cpu"
+        engine.asr_name = "Faster-Whisper Mock"
+        engine.blacklist = {}
+        engine.jev_head_trained = False
+        engine.w2v_model_path = None
 
-        cb_action = "HOLD_VERIFICATION_REQUIRED" if transcription_failed else "ALLOW_NORMAL_CALL"
+        # Simulate ASR failure (e.g. timeout or exception during speech recognition)
+        engine.transcribe_and_spot_keywords = MagicMock(
+            return_value=("", [], "ASR model timeout / inference crash")
+        )
+        engine.analyze_telecom = MagicMock(
+            return_value={"is_blacklisted": False, "is_voip_spoofed": False, "location": "Bengaluru"}
+        )
+        engine.extract_prosodic_dsp = MagicMock(
+            return_value={"rms_energy": 0.05, "zcr": 0.02, "spectral_flatness": 0.01}
+        )
+        engine.run_acoustic_ear = MagicMock(return_value=10.0)
 
-        self.assertEqual(analysis_status, "incomplete_analysis")
-        self.assertEqual(threat_type, "UNVERIFIED_TRANSCRIPTION_FAILED")
-        self.assertNotEqual(threat_type, "AUTHENTIC_SAFE_CALL")
-        self.assertEqual(cb_action, "HOLD_VERIFICATION_REQUIRED")
+        # 2 seconds of 16kHz sine wave simulating audible speech
+        sr = 16000
+        dummy_audio = (np.sin(2 * np.pi * 440 * np.linspace(0, 2, 2 * sr)) * 0.2).astype(np.float32)
+
+        result = engine.evaluate_live_call(dummy_audio, phone_number="+91-9876543210")
+
+        self.assertEqual(result["status"], "incomplete_analysis")
+        self.assertEqual(result["threat_type"], "UNVERIFIED_TRANSCRIPTION_FAILED")
+        self.assertNotEqual(result["threat_type"], "AUTHENTIC_SAFE_CALL")
+        self.assertEqual(result["circuit_breaker"]["action"], "HOLD_VERIFICATION_REQUIRED")
+        self.assertIn("transcription_error", result)
+        self.assertEqual(result["transcription_error"], "ASR model timeout / inference crash")
 
 if __name__ == "__main__":
     unittest.main()

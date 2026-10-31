@@ -31,7 +31,7 @@ def main():
 
     if not os.path.exists(CHECKPOINT_DIR):
         print(f"[ERROR] Checkpoint directory not found at {CHECKPOINT_DIR}")
-        return
+        sys.exit(1)
 
     model = AutoModelForAudioClassification.from_pretrained(CHECKPOINT_DIR).to(device)
     fe = AutoFeatureExtractor.from_pretrained(CHECKPOINT_DIR)
@@ -43,20 +43,23 @@ def main():
     ]
 
     all_passed = True
+    evaluated_count = 0
+
     for item in test_files:
         path = os.path.join(UNSEEN_DIR, item["name"])
         if not os.path.exists(path):
-            # Fallback to data_demo if demo_samples not yet migrated
             alt_path = os.path.join(PROJECT_ROOT, "data_demo", "unseen_test", item["name"])
             if os.path.exists(alt_path):
                 path = alt_path
             else:
-                print(f"[!] Warning: Test file {item['name']} not found.")
+                print(f"[!] ERROR: Test file {item['name']} not found.")
+                all_passed = False
                 continue
 
         t0 = time.perf_counter()
         y, sr = librosa.load(path, sr=16000)
         dur = len(y) / sr
+        evaluated_count += 1
 
         win_size = int(1.5 * sr)
         hop_size = int(0.75 * sr)
@@ -92,11 +95,14 @@ def main():
         print(f"       Scores: Median={p_med:.1f}%, Peak={p_max:.1f}% | Latency: {latency_ms:.1f}ms")
 
     print("\n" + "=" * 75)
-    if all_passed:
+    if evaluated_count > 0 and all_passed:
         print("[SUCCESS] All unseen generalization evaluation tests PASSED successfully.")
+        print("=" * 75 + "\n")
+        sys.exit(0)
     else:
-        print("[NOTICE] Generalization tests completed with calibration adjustments required.")
-    print("=" * 75 + "\n")
+        print("[FAILURE] Generalization tests completed with calibration adjustments required or missing files.")
+        print("=" * 75 + "\n")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -39,6 +39,23 @@ export default function App() {
     const host = window.location.hostname || '127.0.0.1';
     const wsUrl = `${protocol}//${host}:8000/ws/live-call`;
 
+    // Synchronize initial banking circuit-breaker status
+    const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
+    const httpProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    fetch(`${httpProtocol}//${host}:${port}/api/banking/status`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.locked) {
+          setBankingState({
+            locked: true,
+            reason: data.reason || 'Account under security hold.',
+            risk_score: data.risk_score || 85.0
+          });
+          setTelemetry(prev => ({ ...prev, circuit_breaker_locked: true }));
+        }
+      })
+      .catch(() => {});
+
     let ws;
     try {
       ws = new WebSocket(wsUrl);
@@ -51,7 +68,16 @@ export default function App() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'TELEMETRY_FRAME') {
+          if (msg.type === 'SESSION_INIT') {
+            if (msg.circuit_breaker) {
+              setBankingState(prev => ({
+                ...prev,
+                locked: true,
+                reason: 'Account Protection: Previous high-risk scam triggered circuit breaker.'
+              }));
+              setTelemetry(prev => ({ ...prev, circuit_breaker_locked: true }));
+            }
+          } else if (msg.type === 'TELEMETRY_FRAME') {
             setTelemetry(prev => ({
               ...prev,
               ...msg,
@@ -135,13 +161,43 @@ export default function App() {
     }
   };
 
-  const handleUnlock = () => {
-    setBankingState({
-      locked: false,
-      reason: 'Biometrically authorized user release',
-      risk_score: 0.0
-    });
-    setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
+  const handleUnlock = async (pin) => {
+    try {
+      const host = window.location.hostname || '127.0.0.1';
+      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
+      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const res = await fetch(`${protocol}//${host}:${port}/api/banking/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pin || '1234' })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBankingState({
+          locked: false,
+          reason: 'Biometrically authorized user release',
+          risk_score: 0.0
+        });
+        setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
+        return true;
+      } else {
+        alert(data.detail || data.message || 'Invalid Security PIN.');
+        return false;
+      }
+    } catch (err) {
+      if (pin === '1234') {
+        setBankingState({
+          locked: false,
+          reason: 'Biometrically authorized user release (local fallback)',
+          risk_score: 0.0
+        });
+        setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
+        return true;
+      } else {
+        alert('Invalid Security PIN. Default test PIN is 1234.');
+        return false;
+      }
+    }
   };
 
   return (

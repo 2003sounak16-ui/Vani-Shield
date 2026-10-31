@@ -113,6 +113,21 @@ class EphemeralRAMBuffer:
             combined = np.pad(combined, (0, self.max_samples - len(combined)))
         return combined
 
+    def get_buffer_duration(self, session_id: str) -> float:
+        """Returns total duration in seconds of audio buffered for the given session."""
+        now = time.time()
+        cutoff = now - self.max_duration_sec
+        with self._lock:
+            q = self.buffers.get(session_id)
+            if not q:
+                return 0.0
+            total_samples = sum(len(item[1]) for item in q if item[0] >= cutoff)
+            return round(total_samples / float(self.sample_rate), 3)
+
+    def clear_session(self, session_id: str):
+        """Alias for purge_session to clear volatile RAM immediately."""
+        self.purge_session(session_id)
+
     def purge_session(self, session_id: str):
         """Overwrites memory with zeros and frees volatile RAM immediately upon call end."""
         with self._lock:
