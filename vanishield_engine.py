@@ -162,15 +162,24 @@ class VaniShieldCore:
         else:
             print(f"  [1/5 Audio Ear & Brain] Active Master SOTA Checkpoint: {active_checkpoint}")
 
-        # Load trained Jev decision head weights if available
+        # Load trained Jev decision head and LayerNorm weights if available
         if not self.jev_head_trained and os.path.exists(HEAD_NPZ):
             try:
                 head_data = np.load(HEAD_NPZ)
-                if "W" in head_data and "b" in head_data:
+                has_head = "W" in head_data and "b" in head_data
+                has_norm = ("norm_w" in head_data and "norm_b" in head_data) or ("norm_weight" in head_data and "norm_bias" in head_data)
+                if has_head and has_norm:
                     self.model.jev_head.weight.data = torch.from_numpy(head_data["W"]).to(self.device)
                     self.model.jev_head.bias.data = torch.from_numpy(head_data["b"]).to(self.device)
+                    norm_w = head_data["norm_w"] if "norm_w" in head_data else head_data["norm_weight"]
+                    norm_b = head_data["norm_b"] if "norm_b" in head_data else head_data["norm_bias"]
+                    self.model.jev_norm.weight.data = torch.from_numpy(norm_w).to(self.device)
+                    self.model.jev_norm.bias.data = torch.from_numpy(norm_b).to(self.device)
                     self.jev_head_trained = True
-                    print(f"  [1/5 Audio Ear & Brain] Loaded calibrated Jev decision head from: {HEAD_NPZ}")
+                    print(f"  [1/5 Audio Ear & Brain] Loaded calibrated Jev decision head and LayerNorm from: {HEAD_NPZ}")
+                else:
+                    logger.warning(f"Incomplete weights in {HEAD_NPZ} (requires both decision head and norm weights). Falling back to contextual intent.")
+                    self.jev_head_trained = False
             except Exception as e:
                 logger.warning(f"Could not load calibrated Jev head from {HEAD_NPZ}: {e}")
                 self.jev_head_trained = False

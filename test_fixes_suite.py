@@ -122,7 +122,7 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertFalse(is_aware_3, "Tricky scam with real demand must NOT be exempted")
 
     def test_decision_head_file_integrity(self):
-        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd."""
+        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd, norm_w, norm_b."""
         head_path = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
         self.assertTrue(os.path.exists(head_path), "voice-decision-head-f32.npz must exist")
         data = np.load(head_path)
@@ -130,8 +130,12 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertIn("b", data)
         self.assertIn("mu", data)
         self.assertIn("sd", data)
+        self.assertIn("norm_w", data)
+        self.assertIn("norm_b", data)
         self.assertEqual(data["W"].shape, (2, 3840))
         self.assertEqual(data["b"].shape, (2,))
+        self.assertEqual(data["norm_w"].shape, (3840,))
+        self.assertEqual(data["norm_b"].shape, (3840,))
 
 if __name__ == "__main__":
     unittest.main()
