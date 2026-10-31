@@ -367,5 +367,33 @@ class TestVaniShieldFixes(unittest.TestCase):
             ev_mod.core_engine = saved_engine
             state.locked = False
 
+        # 4. Test simulate preset trips banking_state.locked
+        from backend.api.evaluate import _sync_simulate_preset
+        state.locked = False
+        saved_engine = ev_mod.core_engine
+        try:
+            mock_eng = MagicMock()
+            mock_eng.evaluate_live_call = MagicMock(return_value={
+                "circuit_breaker": {"engaged": True},
+                "unified_risk_score": 96.5,
+                "threat_type": "AI_VOICE_CLONE_FINANCIAL_SCAM"
+            })
+            ev_mod.core_engine = mock_eng
+            saved_loader = ev_mod.load_audio_as_16k_np
+            ev_mod.load_audio_as_16k_np = MagicMock(return_value=np.zeros(16000, dtype=np.float32))
+            saved_exists = os.path.exists
+            os.path.exists = MagicMock(return_value=True)
+            try:
+                preset = {"audio_file": "dummy.wav", "phone": "+91-1409988776", "transcript": "OTP request"}
+                res = _sync_simulate_preset(preset)
+            finally:
+                ev_mod.load_audio_as_16k_np = saved_loader
+                os.path.exists = saved_exists
+            self.assertTrue(state.locked, "Simulate preset tripping circuit breaker must set banking state locked to True")
+            self.assertEqual(state.risk_score, 96.5)
+        finally:
+            ev_mod.core_engine = saved_engine
+            state.locked = False
+
 if __name__ == "__main__":
     unittest.main()

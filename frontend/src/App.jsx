@@ -26,8 +26,9 @@ export default function App() {
 
   const [bankingState, setBankingState] = useState({
     locked: false,
-    reason: 'Account Normal',
+    reason: 'Checking security status...',
     risk_score: 0.0,
+    initialized: false,
   });
 
   const [wsConnected, setWsConnected] = useState(false);
@@ -45,16 +46,18 @@ export default function App() {
     fetch(`${httpProtocol}//${host}:${port}/api/banking/status`)
       .then(res => res.json())
       .then(data => {
-        if (data.locked) {
-          setBankingState({
-            locked: true,
-            reason: data.reason || 'Account under security hold.',
-            risk_score: data.risk_score || 85.0
-          });
-          setTelemetry(prev => ({ ...prev, circuit_breaker_locked: true }));
-        }
+        const isLocked = Boolean(data.locked);
+        setBankingState({
+          locked: isLocked,
+          reason: data.reason || (isLocked ? 'Account under security hold.' : 'Account Normal'),
+          risk_score: data.risk_score || (isLocked ? 85.0 : 0.0),
+          initialized: true
+        });
+        setTelemetry(prev => ({ ...prev, circuit_breaker_locked: isLocked }));
       })
-      .catch(() => {});
+      .catch(() => {
+        setBankingState(prev => ({ ...prev, initialized: true }));
+      });
 
     let ws;
     try {
@@ -70,22 +73,14 @@ export default function App() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'SESSION_INIT') {
             const isLocked = Boolean(msg.circuit_breaker || msg.circuit_breaker_locked || msg.locked);
-            if (isLocked) {
-              setBankingState(prev => ({
-                ...prev,
-                locked: true,
-                reason: msg.reason || 'Account Protection: Previous high-risk scam triggered circuit breaker.',
-                risk_score: msg.risk_score || 95.0
-              }));
-              setTelemetry(prev => ({ ...prev, circuit_breaker_locked: true }));
-            } else {
-              setBankingState(prev => ({
-                ...prev,
-                locked: false,
-                reason: 'Account Normal'
-              }));
-              setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
-            }
+            setBankingState(prev => ({
+              ...prev,
+              locked: isLocked,
+              reason: msg.reason || (isLocked ? 'Account Protection: Previous high-risk scam triggered circuit breaker.' : 'Account Normal'),
+              risk_score: msg.risk_score || (isLocked ? 95.0 : 0.0),
+              initialized: true
+            }));
+            setTelemetry(prev => ({ ...prev, circuit_breaker_locked: isLocked }));
           } else if (msg.type === 'TELEMETRY_FRAME') {
             setTelemetry(prev => ({
               ...prev,
@@ -96,7 +91,8 @@ export default function App() {
               setBankingState({
                 locked: true,
                 reason: `Fraud Defense: Voice Clone Risk (${msg.unified_risk}%) detected on live call.`,
-                risk_score: msg.unified_risk
+                risk_score: msg.unified_risk,
+                initialized: true
               });
             }
           }
@@ -117,6 +113,20 @@ export default function App() {
   }, []);
 
   const handleSimulateScam = () => {
+    const host = window.location.hostname || '127.0.0.1';
+    const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+
+    // Persist lock state to backend banking server immediately
+    fetch(`${protocol}//${host}:${port}/api/banking/lock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reason: 'Fraud Defense: Unified Risk 97.9% — AI Voice Clone Scam Intercepted.',
+        risk_score: 97.9
+      })
+    }).catch(() => {});
+
     if (wsRef.current && wsConnected) {
       wsRef.current.send(JSON.stringify({ action: 'SIMULATE_SCAM_CALL' }));
     } else {
@@ -141,7 +151,8 @@ export default function App() {
       setBankingState({
         locked: true,
         reason: 'Fraud Defense: Unified Risk 97.9% — AI Voice Clone Scam Intercepted.',
-        risk_score: 97.9
+        risk_score: 97.9,
+        initialized: true
       });
     }
   };
@@ -187,10 +198,7 @@ export default function App() {
         return { success: false, message: data.detail || data.message || 'Transaction blocked by banking circuit breaker.' };
       }
     } catch (err) {
-      if (bankingState.locked) {
-        return { success: false, message: 'TRANSACTION BLOCKED: VaniShield Automated Circuit Breaker is active!' };
-      }
-      return { success: true, message: `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.` };
+      return { success: false, message: 'Transaction rejected: Unable to communicate with banking service.' };
     }
   };
 
@@ -209,7 +217,8 @@ export default function App() {
         setBankingState({
           locked: false,
           reason: 'Biometrically authorized user release',
-          risk_score: 0.0
+          risk_score: 0.0,
+          initialized: true
         });
         setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
         return true;

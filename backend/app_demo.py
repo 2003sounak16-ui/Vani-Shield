@@ -355,17 +355,18 @@ def _sync_simulate_preset(preset: dict) -> dict:
 
 
 
-    return core_engine.evaluate_live_call(
-
+    result = core_engine.evaluate_live_call(
         audio_chunk_16k=audio_np,
-
         phone_number=preset["phone"],
-
         known_transcript=preset["transcript"],
-
         is_upload=True
-
     )
+    cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = result.get("unified_risk_score", 95.0)
+        banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+    return result
 
 
 
@@ -709,7 +710,11 @@ async def live_call_websocket(websocket: WebSocket):
                 "carrier": "VoIP / Cellular Gateway",
                 "location": "National / Metro Node"
             },
-            "circuit_breaker": banking_state.locked
+            "circuit_breaker": banking_state.locked,
+            "circuit_breaker_locked": banking_state.locked,
+            "locked": banking_state.locked,
+            "reason": banking_state.reason,
+            "risk_score": banking_state.risk_score
         }))
     except Exception as e:
         logger.warning(f"Failed to send SESSION_INIT: {e}")

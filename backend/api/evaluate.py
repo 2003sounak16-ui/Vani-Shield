@@ -219,15 +219,25 @@ def _sync_simulate_preset(preset: dict) -> dict:
     audio_np = load_audio_as_16k_np(path)
 
     if core_engine is not None:
-        return core_engine.evaluate_live_call(
+        result = core_engine.evaluate_live_call(
             audio_np,
             phone_number=preset["phone"],
             known_transcript=preset.get("transcript"),
             is_upload=True
         )
+        cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+        if cb_engaged and not banking_state.locked:
+            banking_state.locked = True
+            banking_state.risk_score = result.get("unified_risk_score", 95.0)
+            banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+        return result
     # Lightweight fallback when running locally without full ML weights
     is_scam = any(k in preset.get("transcript", "").lower() for k in ["otp", "cvv", "illegal", "pin", "warrant", "debit"])
     risk = 98.5 if is_scam else 1.2
+    if is_scam and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = risk
+        banking_state.reason = "Automated Defense: Scam detected (Preset Fallback)"
     return {
         "status": "success",
         "latency_ms": 15.0,

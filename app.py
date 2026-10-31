@@ -386,17 +386,18 @@ def load_wav_16k_mono(path: str) -> np.ndarray:
 def _sync_simulate_preset(preset: dict) -> dict:
     audio_np = load_wav_16k_mono(preset["audio_file"])
 
-    return core_engine.evaluate_live_call(
-
+    result = core_engine.evaluate_live_call(
         audio_chunk_16k=audio_np,
-
         phone_number=preset["phone"],
-
         known_transcript=preset["transcript"],
-
         is_upload=True
-
     )
+    cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = result.get("unified_risk_score", 95.0)
+        banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+    return result
 
 
 
@@ -911,6 +912,11 @@ async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
                 ),
             )
             frame = _assemble_frame(result, session, accumulator)
+            cb_engaged = bool(frame.get("circuit_breaker", {}).get("engaged", False))
+            if cb_engaged and not banking_state.locked:
+                banking_state.locked = True
+                banking_state.risk_score = frame.get("unified_risk_score", 95.0)
+                banking_state.reason = f"Automated Defense: {frame.get('threat_type', 'Scam detected')}"
             frame["replay"] = {
                 "preset_id": preset_id,
                 "step": step + 1,
@@ -1002,7 +1008,11 @@ async def live_call_websocket(websocket: WebSocket):
                 "carrier": "VoIP / Cellular Gateway",
                 "location": "National / Metro Node"
             },
-            "circuit_breaker": banking_state.locked
+            "circuit_breaker": banking_state.locked,
+            "circuit_breaker_locked": banking_state.locked,
+            "locked": banking_state.locked,
+            "reason": banking_state.reason,
+            "risk_score": banking_state.risk_score
         }))
     except Exception as e:
         logger.warning(f"Failed to send SESSION_INIT: {e}")
@@ -1065,7 +1075,13 @@ async def live_call_websocket(websocket: WebSocket):
                 )
 
                 # 4. Stream the session-accumulated frame back to the client
-                await websocket.send_json(_assemble_frame(eval_result, session, accumulator))
+                frame = _assemble_frame(eval_result, session, accumulator)
+                cb_engaged = bool(frame.get("circuit_breaker", {}).get("engaged", False))
+                if cb_engaged and not banking_state.locked:
+                    banking_state.locked = True
+                    banking_state.risk_score = frame.get("unified_risk_score", 95.0)
+                    banking_state.reason = f"Automated Defense: {frame.get('threat_type', 'Scam detected')}"
+                await websocket.send_json(frame)
 
             elif "text" in message:
                 try:
