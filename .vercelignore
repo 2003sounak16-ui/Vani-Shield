@@ -1,0 +1,22 @@
+# Vercel Ignore File — Exclude large assets exceeding Vercel 100MB file limit
+results_master_unified/
+ml_pipeline/checkpoints/mobile_edge/
+ml_pipeline/manifests/
+demo_samples/
+audio/
+node_modules
+frontend/node_modules
+.git
+.github
+__pycache__
+*.pyc
+*.pt
+*.safetensors
+*.gguf
+*.bin
+*.tar.gz
+*.zip
+.env
+.venv
+venv/
+graphify-out/

@@ -92,9 +92,14 @@ import numpy as np
 
 import soundfile as sf
 
-import torch
-
-import torchaudio
+try:
+    import torch
+    import torchaudio
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    torchaudio = None
+    TORCH_AVAILABLE = False
 
 from fastapi import (FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form, Request, Header)
 
@@ -1311,7 +1316,7 @@ async def health_check():
         "status": "healthy" if core_engine is not None else "degraded_missing_weights",
         "engine": "VaniShield AI Core v2.0",
         "device": core_engine.device if core_engine is not None else "unavailable",
-        "cuda_available": torch.cuda.is_available(),
+        "cuda_available": bool(torch and torch.cuda.is_available()),
         "jev_server": JEV_SERVER_URL,
         "dpdp_privacy": "Ephemeral In-Process RAM Ring Buffer Active",
         "demo_mode": demo_scorer is not None,
