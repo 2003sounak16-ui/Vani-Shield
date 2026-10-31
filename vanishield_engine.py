@@ -665,8 +665,12 @@ class VaniShieldCore:
         single place both substitutions live: the demo stub, and upstream's
         fallback for an install with no torch.
         """
-        if self.demo_scorer is not None:
-            return self.demo_scorer.score_windows_percent(clips)
+        # getattr, not attribute access: test doubles build this object with
+        # VaniShieldCore.__new__ and set only the few attributes they need, so
+        # requiring demo_scorer here breaks every such test.
+        demo_scorer = getattr(self, "demo_scorer", None)
+        if demo_scorer is not None:
+            return demo_scorer.score_windows_percent(clips)
 
         if (
             getattr(self, "fe", None) is None
@@ -1519,7 +1523,15 @@ class VaniShieldCore:
 
         else:
 
-            transcript, flagged_kw, transcription_err, asr_language = self.transcribe_and_spot_keywords(audio_chunk_16k, is_upload=is_upload)
+            asr_result = self.transcribe_and_spot_keywords(audio_chunk_16k, is_upload=is_upload)
+            # Tolerate the previous 3-tuple contract. This method is replaced
+            # by doubles in the existing test suite, and widening its return
+            # value should not break callers that predate the change.
+            if len(asr_result) >= 4:
+                transcript, flagged_kw, transcription_err, asr_language = asr_result[:4]
+            else:
+                transcript, flagged_kw, transcription_err = asr_result
+                asr_language = None
 
 
 
@@ -1782,6 +1794,18 @@ class VaniShieldCore:
         final_risk = fusion["risk_score"]
         legacy_threat_type = threat_type
         threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob)
+
+        # A call we could not transcribe cannot be reported as safe. The
+        # fusion scores the evidence it has, and with no transcript it sees no
+        # stages at all - which turns "the microphone worked but the recogniser
+        # fell over" into a green verdict on a call nobody has actually read.
+        # The ladder got this right, so its floor and verdict are restored for
+        # this case specifically.
+        if transcription_failed:
+            final_risk = round(max(final_risk, 45.0 if has_audible_speech else 20.0), 1)
+            fusion["risk_score"] = final_risk
+            fusion["band"] = scam_stages.band_for(final_risk)
+            threat_type = "UNVERIFIED_TRANSCRIPTION_FAILED"
 
 
 
