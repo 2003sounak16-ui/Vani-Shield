@@ -49,6 +49,7 @@ import functools
 # Required by the TTS rate limiter below (_tts_lock). Its absence made
 # app.py raise NameError at import time, so the server could not start.
 import threading
+import hmac
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -90,7 +91,7 @@ import torch
 
 import torchaudio
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form
+from fastapi import (FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form, Header)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -130,6 +131,46 @@ UPLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_WORKERS)
 
 # Guard limits against memory exhaustion (Issue #5)
 
+# Mutating the persisted blacklist is gated behind a shared control PIN, the
+# same mechanism backend/api/banking_hold.py already uses to release a hold.
+# Without it any client that can reach the socket could write an arbitrary
+# number into a list that forces a 99.0 risk score and locks banking - which
+# is a denial of service against whoever that number belongs to, and a way to
+# poison a list every later call is scored against.
+#
+# Unlike banking_hold this has no default PIN. A well-known default on a
+# persisted, shared list is worse than not shipping the feature, so an
+# unconfigured deployment refuses the write instead of accepting it.
+CONTROL_PIN_ENV_VARS = ("VANISHIELD_CONTROL_PIN", "VANISHIELD_BANKING_PIN")
+CONTROL_PIN_HEADER = "X-VaniShield-Pin"
+
+
+def _configured_control_pin() -> Optional[str]:
+    for name in CONTROL_PIN_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def require_control_pin(pin: Optional[str]) -> None:
+    """Raises unless `pin` matches the configured control PIN."""
+    expected = _configured_control_pin()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Blacklist changes are disabled: no control PIN is configured. "
+                f"Set {CONTROL_PIN_ENV_VARS[0]} to enable them."
+            ),
+        )
+    # compare_digest rather than ==, so a wrong PIN cannot be recovered by
+    # timing the response.
+    if not pin or not hmac.compare_digest(str(pin), expected):
+        raise HTTPException(status_code=403, detail="Invalid or missing control PIN.")
+
+
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024               # 25 MB max upload
 
 MAX_AUDIO_SECONDS = 180                           # 3 minutes max duration
@@ -140,7 +181,11 @@ MAX_DECODED_SAMPLES = MAX_AUDIO_SECONDS * 16000  # 2,880,000 samples @ 16kHz
 # stream ~250ms packets; a full pass over the 3.5s window costs more than that,
 # so without this the executor queue grows without bound and every reported
 # latency becomes a measure of the backlog rather than of the pipeline.
-MIN_EVAL_INTERVAL_SECONDS = 0.5
+# Deliberately decoupled from the client's packet rate: a caller streaming
+# 250ms packets gets a frame about every 500ms, not one per packet. Clients
+# must treat frames as a stream of updates rather than request/response.
+# Set VANISHIELD_MIN_EVAL_INTERVAL=0 to score every packet.
+MIN_EVAL_INTERVAL_SECONDS = float(os.environ.get("VANISHIELD_MIN_EVAL_INTERVAL", "0.5"))
 
 
 
@@ -718,6 +763,7 @@ class _CallAccumulator:
 
     def __init__(self):
         self.payment_attempt = False
+        self.session_blocked = False
         self.high_sensitivity = False
 
     def observe(self, stage_payload: dict):
@@ -757,12 +803,12 @@ def _assemble_frame(result: dict, session, accumulator: "_CallAccumulator") -> d
         accumulated_stages,
         acoustic_prob=call_ema,
         payment_attempt=accumulator.payment_attempt,
-        blacklisted=bool(telecom.get("is_blacklisted", False)),
+        blacklisted=bool(telecom.get("is_blacklisted", False)) or accumulator.session_blocked,
         voip_spoofed=bool(telecom.get("is_voip_spoofed", False)),
         credential_high_sensitivity=accumulator.high_sensitivity,
     )
     breaker_engaged = bool(
-        telecom.get("is_blacklisted", False) or fusion["risk_score"] >= 70.0
+        telecom.get("is_blacklisted", False) or accumulator.session_blocked or fusion["risk_score"] >= 70.0
     )
 
     # CallSession names a running call "LIVE"; the client contract calls it
@@ -1056,29 +1102,23 @@ async def live_call_websocket(websocket: WebSocket):
                         session.set_caller(caller_phone)
                         logger.info(f"Session {session_id} updated caller ID to: {caller_phone}")
                 elif action == "BLOCK_CALLER":
-                    if core_engine is None:
-                        await websocket.send_json({
-                            "status": "error",
-                            "error": "Core engine uninitialized; cannot block caller.",
-                        })
-                        continue
-                    try:
-                        blocked = await loop.run_in_executor(
-                            ANALYSIS_EXECUTOR,
-                            functools.partial(
-                                core_engine.block_caller,
-                                caller_phone,
-                                reason="Blocked from live call screen",
-                            ),
-                        )
-                        await websocket.send_json({
-                            "status": "blocked",
-                            "session_id": session_id,
-                            "caller": blocked["caller"],
-                            "persisted": blocked["persisted"],
-                        })
-                    except ValueError as ve:
-                        await websocket.send_json({"status": "error", "error": str(ve)})
+                    # Scoped to this call only, and never written to disk.
+                    # The caller number here is whatever the client asserted
+                    # (query param or SET_CALLER), so honouring it as a
+                    # persistent, global block would let any unauthenticated
+                    # client blacklist a number it simply made up. Persisting
+                    # a block is an administrative action and lives behind the
+                    # PIN-gated REST endpoint instead.
+                    accumulator.session_blocked = True
+                    logger.info(f"Session {session_id} blocked its caller for the duration of the call.")
+                    await websocket.send_json({
+                        "status": "blocked",
+                        "session_id": session_id,
+                        "caller": core_engine.normalize_caller_key(caller_phone) if core_engine else caller_phone,
+                        "persisted": False,
+                        "scope": "session",
+                    })
+
                 elif action == "END_CALL":
                     # Hard purge from volatile memory upon call completion
                     ram_ring_buffer.purge_session(session_id)
@@ -1161,19 +1201,27 @@ class BlockRequest(BaseModel):
 
 
 @app.post("/api/blacklist")
-async def add_to_blacklist(payload: BlockRequest):
-    """Blocks a caller on the user's own instruction."""
+async def add_to_blacklist(
+    payload: BlockRequest,
+    pin: Optional[str] = Header(None, alias=CONTROL_PIN_HEADER),
+):
+    """Persistently blocks a caller. Requires the control PIN."""
+    require_control_pin(pin)
     if core_engine is None:
         raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
     try:
         result = core_engine.block_caller(payload.phone_number, reason=payload.reason or "Blocked by user")
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    logger.info(f"Blacklist add accepted for {result['caller']}.")
     return {"status": "blocked", **result}
 
 
 @app.delete("/api/blacklist/{phone_number:path}")
-async def remove_from_blacklist(phone_number: str):
+async def remove_from_blacklist(
+    phone_number: str,
+    pin: Optional[str] = Header(None, alias=CONTROL_PIN_HEADER),
+):
     """
     Unblocks a caller.
 
@@ -1181,6 +1229,7 @@ async def remove_from_blacklist(phone_number: str):
     this a single false positive would permanently block a real contact with no
     way back.
     """
+    require_control_pin(pin)
     if core_engine is None:
         raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
     removed = core_engine.unblock_caller(phone_number)
