@@ -12,6 +12,7 @@ import os
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+import logging
 import re
 import json
 import time
@@ -25,6 +26,8 @@ import phonenumbers
 from phonenumbers import geocoder, carrier
 from transformers import AutoFeatureExtractor, Wav2Vec2ForSequenceClassification
 import faiss
+
+logger = logging.getLogger("vanishield_engine")
 
 # Load environment variables (.env) if present
 try:
@@ -49,7 +52,10 @@ MASTER_SOTA_DIR = os.path.join(PROJECT_ROOT, "results_master_sota")
 FALLBACK_4447_DIR = os.path.join(PROJECT_ROOT, "results_4447_models")
 FALLBACK_MULTI_DIR = os.path.join(PROJECT_ROOT, "results_real_multilingual")
 
-if os.path.exists(os.path.join(UNIFIED_DIR, "config.json")):
+ENV_CHECKPOINT = os.environ.get("VANISHIELD_CHECKPOINT")
+if ENV_CHECKPOINT and os.path.exists(os.path.join(ENV_CHECKPOINT, "config.json")):
+    W2V_CHECKPOINT = ENV_CHECKPOINT
+elif os.path.exists(os.path.join(UNIFIED_DIR, "config.json")):
     W2V_CHECKPOINT = UNIFIED_DIR
 elif os.path.exists(os.path.join(BALANCED_DIR, "config.json")):
     W2V_CHECKPOINT = BALANCED_DIR
@@ -57,12 +63,14 @@ elif os.path.exists(os.path.join(MASTER_SOTA_DIR, "config.json")):
     W2V_CHECKPOINT = MASTER_SOTA_DIR
 elif os.path.exists(os.path.join(FALLBACK_4447_DIR, "config.json")):
     W2V_CHECKPOINT = FALLBACK_4447_DIR
-else:
+elif os.path.exists(os.path.join(FALLBACK_MULTI_DIR, "config.json")):
     W2V_CHECKPOINT = FALLBACK_MULTI_DIR
+else:
+    W2V_CHECKPOINT = None
 
-UNIFIED_MODEL_PT = r"C:\AI\VoiceCloning\unified_jev_wav2vec_model.pt"
-BLACKLIST_FILE = r"C:\AI\VoiceCloning\scammer_blacklist.json"
-JEV_SERVER_URL = "http://127.0.0.1:9931"
+UNIFIED_MODEL_PT = os.environ.get("VANISHIELD_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_wav2vec_model.pt"))
+BLACKLIST_FILE = os.environ.get("VANISHIELD_BLACKLIST_PATH", os.path.join(PROJECT_ROOT, "scammer_blacklist.json"))
+JEV_SERVER_URL = os.environ.get("VANISHIELD_JEV_URL", "http://127.0.0.1:9931")
 
 # Multilingual Banking Scam Patterns (Bengali, Hindi, Indian English, Hinglish/Benglish)
 SCAM_PATTERNS = [
@@ -96,13 +104,18 @@ CITY_COORDINATES = {
 }
 
 class UnifiedMultilingualVoiceNet(nn.Module):
-    def __init__(self, jev_dim=3840, w2v_model_path=W2V_CHECKPOINT):
+    def __init__(self, jev_dim=3840, w2v_model_path=None):
         super().__init__()
-        is_local = os.path.exists(os.path.join(w2v_model_path, "config.json"))
-        load_path = w2v_model_path if is_local else "facebook/wav2vec2-base"
+        target_path = w2v_model_path or W2V_CHECKPOINT
+        if not target_path or not os.path.exists(os.path.join(target_path, "config.json")):
+            raise RuntimeError(
+                f"No trained Wav2Vec 2.0 checkpoint found at '{target_path}'. "
+                "VaniShield requires a trained voice-clone detection checkpoint and cannot run with untrained weights. "
+                "Please configure a valid trained checkpoint directory containing config.json."
+            )
         self.wav2vec_cls = Wav2Vec2ForSequenceClassification.from_pretrained(
-            load_path,
-            local_files_only=is_local
+            target_path,
+            local_files_only=True
         )
         self.jev_norm = nn.LayerNorm(jev_dim)
         self.jev_head = nn.Linear(jev_dim, 2)
@@ -118,25 +131,31 @@ class UnifiedMultilingualVoiceNet(nn.Module):
         return logits_w2v
 
 class VaniShieldCore:
-    def __init__(self, device: str = None):
+    def __init__(self, device: str = None, checkpoint_path: str = None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[VaniShieldCore] Initializing Core on {self.device.upper()}...")
 
+        active_checkpoint = checkpoint_path or W2V_CHECKPOINT
+        if not active_checkpoint or not os.path.exists(os.path.join(active_checkpoint, "config.json")):
+            raise RuntimeError(
+                f"Missing trained Wav2Vec 2.0 checkpoint at '{active_checkpoint}'. "
+                "VaniShield requires trained weights to provide genuine voice-clone detection. "
+                "Please provide a fine-tuned checkpoint (e.g. in results_master_unified or via VANISHIELD_CHECKPOINT)."
+            )
+
         # 1. Feature Extractor
-        is_local = os.path.exists(os.path.join(W2V_CHECKPOINT, "config.json"))
-        load_path = W2V_CHECKPOINT if is_local else "facebook/wav2vec2-base"
         self.fe = AutoFeatureExtractor.from_pretrained(
-            load_path,
-            local_files_only=is_local
+            active_checkpoint,
+            local_files_only=True
         )
 
         # 2. Unified Multimodal Network (Wav2Vec 2.0 + Jev-Omni Fusion Head)
-        self.model = UnifiedMultilingualVoiceNet(w2v_model_path=W2V_CHECKPOINT).to(self.device)
-        if W2V_CHECKPOINT == FALLBACK_MULTI_DIR and os.path.exists(UNIFIED_MODEL_PT):
+        self.model = UnifiedMultilingualVoiceNet(w2v_model_path=active_checkpoint).to(self.device)
+        if active_checkpoint == FALLBACK_MULTI_DIR and os.path.exists(UNIFIED_MODEL_PT):
             self.model.load_state_dict(torch.load(UNIFIED_MODEL_PT, map_location=self.device))
             print(f"  [1/5 Audio Ear & Brain] Loaded legacy unified weights from: {UNIFIED_MODEL_PT}")
         else:
-            print(f"  [1/5 Audio Ear & Brain] Active Master SOTA Checkpoint: {W2V_CHECKPOINT}")
+            print(f"  [1/5 Audio Ear & Brain] Active Master SOTA Checkpoint: {active_checkpoint}")
         self.model.eval()
 
         # Warm-up CUDA
@@ -181,9 +200,10 @@ class VaniShieldCore:
         self.blacklist = {}
         if os.path.exists(BLACKLIST_FILE):
             try:
-                with open(BLACKLIST_FILE, "r") as f:
+                with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
                     self.blacklist = json.load(f)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to load blacklist from {BLACKLIST_FILE}: {e}")
                 self.blacklist = {}
         print(f"  [4/5 Telecom] Loaded {len(self.blacklist)} records from {BLACKLIST_FILE}.")
 
@@ -229,9 +249,13 @@ class VaniShieldCore:
             return np.zeros(3840, dtype=np.float32)
 
     def transcribe_and_spot_keywords(self, audio_chunk_16k: np.ndarray) -> tuple:
-        """Produces live transcript and flags high-risk vishing trigger keywords in <500ms."""
+        """
+        Produces live transcript and flags high-risk vishing trigger keywords.
+        Returns: (text: str, flagged_keywords: list, error_msg: Optional[str])
+        """
         if self.asr is None:
-            return "", []
+            return "", [], "ASR engine is not initialized or unavailable"
+        
         try:
             # Transcribe active speech window (up to 90s / 1,440,000 samples)
             max_asr_samples = 1440000
@@ -248,15 +272,19 @@ class VaniShieldCore:
                 condition_on_previous_text=False
             )
             text = " ".join([s.text for s in segments]).strip()
-        except Exception:
+            transcription_err = None
+        except Exception as e:
+            logger.error(f"ASR transcription exception: {e}")
             text = ""
+            transcription_err = str(e)
 
         flagged = []
-        for pat in SCAM_PATTERNS:
-            matches = re.findall(pat, text, flags=re.IGNORECASE)
-            if matches:
-                flagged.extend(matches)
-        return text, list(set(flagged))
+        if text:
+            for pat in SCAM_PATTERNS:
+                matches = re.findall(pat, text, flags=re.IGNORECASE)
+                if matches:
+                    flagged.extend(matches)
+        return text, list(set(flagged)), transcription_err
 
     def extract_prosodic_dsp(self, audio_chunk_16k: np.ndarray) -> dict:
         """Measures pitch F0 via ultra-fast FFT autocorrelation (<8ms), zero-crossing rate, and spectral metrics on voice-active frames."""
@@ -318,24 +346,33 @@ class VaniShieldCore:
 
         if is_generic_upload and (not raw_num.startswith("+91") or "0000000000" in raw_num or "9830000000" in raw_num or "Direct Audio" in raw_num):
             return {
-                "phone_number": "Direct Audio File Upload",
-                "location": "Local Audio Input",
-                "carrier": "Direct File / Audio Test",
+                "phone_number": raw_num or "+91-0000000000 (Generic Audio Ingestion)",
+                "location": "Local In-Memory Audio (Direct File/Stream Drop)",
+                "carrier": "Direct PCM / Volatile Ring Buffer",
                 "is_voip_spoofed": False,
                 "is_blacklisted": False,
-                "coordinates": [22.5726, 88.3639]
+                "coordinates": CITY_COORDINATES["Kolkata"]
             }
 
-        is_blacklisted = (clean_key in self.blacklist) and (not is_generic_upload)
-        is_voip_spoofed = (raw_num.startswith("+91-140") or raw_num.startswith("+91140") or ("VoIP" in raw_num)) and (not is_generic_upload)
+        is_blacklisted = clean_key in self.blacklist
+        is_voip_spoofed = (
+            clean_key.startswith("+91140")
+            or "VoIP" in raw_num
+            or "Virtual PBX" in raw_num
+            or "Spoofed" in raw_num
+        )
 
-        loc = "Unknown Region"
-        carr = "Virtual VoIP Gateway" if is_voip_spoofed else "Cellular Network"
+        loc = "India (Unassigned Circle)"
+        carr = "Cellular Telecom Network"
         try:
-            parsed = phonenumbers.parse(raw_num, "IN")
+            parsed = phonenumbers.parse(clean_key, None)
             if phonenumbers.is_valid_number(parsed):
-                loc = geocoder.description_for_number(parsed, "en") or loc
-                carr = carrier.name_for_number(parsed, "en") or carr
+                c = carrier.name_for_number(parsed, "en")
+                if c:
+                    carr = c
+                g = geocoder.description_for_number(parsed, "en")
+                if g:
+                    loc = g
         except Exception:
             pass
 
@@ -498,11 +535,13 @@ class VaniShieldCore:
 
             print(f"[AcousticScan] n_win={n_win}, p_max={p_max:.1f}%, p_med={p_med:.1f}%, p_75={p_75:.1f}%, high_conf_cnt={len(high_conf)}, high_ratio={high_ratio:.2f} -> is_ai={is_ai_clone}, w2v_p={w2v_p}%")
         else:
+            n_win = 0
             w2v_p = 0.0
             is_ai_clone = False
             p_max, p_med, p_75, high_ratio = 0.0, 0.0, 0.0, 0.0
 
         # 3. Fast Multilingual ASR & Triggers (< 350 ms)
+        transcription_err = None
         if known_transcript:
             transcript = known_transcript
             flagged_kw = []
@@ -512,17 +551,57 @@ class VaniShieldCore:
                     flagged_kw.extend(matches)
             flagged_kw = list(set(flagged_kw))
         else:
-            transcript, flagged_kw = self.transcribe_and_spot_keywords(audio_chunk_16k)
+            transcript, flagged_kw, transcription_err = self.transcribe_and_spot_keywords(audio_chunk_16k)
 
-        # 4. Context Intent with Jev-Omni & AI4Bharat Lexicon
-        if len(flagged_kw) >= 2:
-            jev_p = min(99.0, 85.0 + len(flagged_kw) * 5.0)
-        elif len(flagged_kw) == 1:
-            jev_p = 80.0
-        elif transcript and any(w in transcript.lower() for w in ['congrat', 'konk', 'bampan', 'bumper', 'lottery', 'winner', 'reward', 'bank', 'police', 'arrest', 'urgent', 'suspend', 'blocked', 'account', 'verify', 'kyc', 'cbi', 'customs', 'debit', 'reverse', 'boss', 'send money', 'give me rs', 'بمپر', 'لاٹری', 'لَاتری', 'کروڑ', 'انعام', 'बरानज', 'पा़ेसे', 'पैसे', 'फ़ॉण', 'फ़ोन', 'फोन', 'काद', 'पसी', 'हुंट', 'प्रावेसी', 'बरानच', 'बैंखे', 'बेंग', 'बेनकाम', 'इटेल']):
-            jev_p = 80.0
-        else:
-            jev_p = 0.0
+        # 4. Context Intent Analysis (Preventing harmless words from triggering fraud locks)
+        # Check for safety advisories / negations (e.g. "Never share your OTP", "Do not give PIN")
+        AWARENESS_NEGATIONS = [
+            r"\b(never|don'?t|do not|should not|must not|beware|alert|warning|caution|avoid|refuse|scam alert|fraud awareness)\b",
+            r"(मत\s*(?:दीजिए|देना|बताइए|शेयर|करना)|कभी\s*(?:मत|ना)|सावधान|धोखाधड़ी|सतर्क)",
+            r"(কখনও\s*(?:দেবেন না|বলবেন না)|শেয়ার\s*করবেন না|সাবধান|সতর্ক|দেবেন না|বলবেন না)"
+        ]
+        is_awareness_warning = bool(transcript and any(re.search(neg, transcript, flags=re.IGNORECASE) for neg in AWARENESS_NEGATIONS))
+
+        # Check for active fraudulent demand / coercion cues:
+        DEMAND_PATTERNS = [
+            r"\b(share|send|tell|give|provide|transfer|enter|verify|update|reverse|confirm|pay|deposit)\b",
+            r"\b(immediately|right now|urgent|urgently|within \d+ minutes|otherwise|blocked|suspended|warrant|arrest|illegal|jail)\b",
+            r"(भेजो|दीजिए|दे दो|बताओ|शेयर करो|ट्रांसफर करो|डालो|तुरंत|अवैध|ब्लॉक|गिरफ्तारी|वॉरंट)",
+            r"(পাঠান|দিন|শেয়ার করুন|বলুন|ট্রান্সফার করুন|অবিলম্বে|স্থগিত|গ্রেফতার|বন্ধ হবে)"
+        ]
+        has_fraud_demand = bool(transcript and any(re.search(dp, transcript, flags=re.IGNORECASE) for dp in DEMAND_PATTERNS))
+
+        # Query Jev decision head if embedding server is active
+        jev_p = 0.0
+        used_jev_head = False
+        if transcript and not is_awareness_warning:
+            lang = self.detect_language(transcript)
+            emb = self.get_jev_embedding(transcript, lang)
+            if emb is not None and np.any(emb):
+                try:
+                    with torch.no_grad():
+                        emb_tensor = torch.tensor(emb, dtype=torch.float32, device=self.device).unsqueeze(0)
+                        logits_jev = self.model.jev_head(self.model.jev_norm(emb_tensor))
+                        jev_prob = float(torch.softmax(logits_jev, dim=-1)[0, 1].item() * 100.0)
+                        jev_p = round(jev_prob, 1)
+                        used_jev_head = True
+                except Exception as e:
+                    logger.debug(f"Jev decision head evaluation fallback: {e}")
+
+        if not used_jev_head:
+            if is_awareness_warning:
+                # Harmless context / awareness warning: zero scam intent
+                jev_p = 0.0
+            elif flagged_kw and has_fraud_demand:
+                # Evidence of active fraudulent coercion or credential theft
+                jev_p = min(99.0, 75.0 + len(flagged_kw) * 5.0)
+            elif len(flagged_kw) >= 3:
+                jev_p = 75.0
+            elif len(flagged_kw) >= 1 and has_fraud_demand:
+                jev_p = 75.0
+            else:
+                # Isolated keyword mention without fraudulent demand
+                jev_p = 0.0
 
         # 5. Telecom Profiling
         telecom = self.lookup_caller_telecom(phone_number, is_upload=is_upload)
@@ -535,45 +614,51 @@ class VaniShieldCore:
             and high_ratio < 0.35
         )
 
+        # Check if transcription failed on audible speech
+        has_audible_speech = (n_win > 0 and (p_med > 5.0 or high_ratio > 0.1 or dsp.get("rms_energy", 0) > 0.02))
+        transcription_failed = bool(transcription_err and not known_transcript)
+
+        analysis_status = "success"
+        if transcription_failed:
+            analysis_status = "incomplete_analysis"
+
         if telecom.get("is_blacklisted", False):
             final_risk = 99.0
-            circuit_breaker_active = True
             threat_type = "BLACKLISTED_SCAMMER"
         elif is_human_fraudster:
             # Human fraudster calling from cellular / landline (transient line compression noise overruled)
             w2v_p = 0.1
             threat_type = "FINANCIAL_SCAM"
             final_risk = round(jev_p, 1)
-            circuit_breaker_active = True
         elif is_ai_clone and jev_p >= 70.0:
             final_risk = round(max(w2v_p, jev_p), 1)
-            circuit_breaker_active = True
             threat_type = "AI_CLONE_AND_FINANCIAL_SCAM"
         elif is_ai_clone:
             final_risk = round(w2v_p, 1)
-            circuit_breaker_active = True
-            threat_type = "AI_VOICE_CLONE"
+            threat_type = "AI_VOICE_CLONE" if final_risk >= 70.0 else "SUSPICIOUS_UNVERIFIED_CALL"
         elif jev_p >= 70.0:
             w2v_p = 0.1
             final_risk = round(jev_p, 1)
-            circuit_breaker_active = True
             threat_type = "FINANCIAL_SCAM"
+        elif transcription_failed and has_audible_speech:
+            final_risk = round(max(w2v_p, 45.0), 1)
+            threat_type = "UNVERIFIED_TRANSCRIPTION_FAILED"
         else:
             final_risk = round(0.6 * w2v_p + 0.4 * jev_p, 1)
             if final_risk >= 40.0:
                 threat_type = "SUSPICIOUS_UNVERIFIED_CALL"
-                circuit_breaker_active = False
             else:
                 threat_type = "AUTHENTIC_SAFE_CALL"
-                circuit_breaker_active = False
 
         if telecom.get("is_voip_spoofed", False) and final_risk > 35.0:
             final_risk = min(100.0, round(final_risk + 10.0, 1))
-            circuit_breaker_active = final_risk >= 70.0
 
         final_risk = round(final_risk, 1)
 
-        # 7. Circuit Breaker Threshold: 70.0%
+        # 7. Circuit Breaker Threshold: strictly derived from final_risk >= 70.0 or blacklisted caller
+        circuit_breaker_active = bool(telecom.get("is_blacklisted", False) or final_risk >= 70.0)
+
+        # Blacklist permanent update only on genuine confirmed breaches >= 70%
         clean_key = phone_number.split(" ")[0].replace("-", "").strip()
         is_generic_upload = (
             is_upload
@@ -595,15 +680,16 @@ class VaniShieldCore:
                 "action": "BANKING_AND_UPI_LOCKED"
             }
             try:
+                os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
                 with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
                     json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to update scammer blacklist at {BLACKLIST_FILE}: {e}")
 
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
-        return {
-            "status": "success",
+        result_payload = {
+            "status": analysis_status,
             "latency_ms": latency_ms,
             "asr_engine": getattr(self, "asr_name", "Faster-Whisper Base (Indic-Optimized)"),
             "indic_conformer_status": "Gated HF Repo (401) -> Fallback to Faster-Whisper Base + AI4Bharat Regex Lexicon",
@@ -622,5 +708,15 @@ class VaniShieldCore:
             "dsp_metrics": dsp
         }
 
+        if transcription_failed:
+            result_payload["transcription_error"] = transcription_err
+            result_payload["warning"] = "Speech was detected but automated transcription failed. Call cannot be verified as safe."
+
+        return result_payload
+
 # Global Singleton
-core_engine = VaniShieldCore()
+try:
+    core_engine = VaniShieldCore()
+except RuntimeError as e:
+    logger.error(f"[VaniShield Startup] {e}")
+    core_engine = None

@@ -26,10 +26,20 @@ print(f"Extracting {len(selected)} curated samples (500 spoof, 500 real) to {out
 
 records = []
 for idx, row in selected.iterrows():
-    in_zip_name = 'release_in_the_wild/' + row['file']
-    out_file = os.path.join(out_dir, row['file'])
+    filename = str(row['file']).strip()
+    # Security check: reject absolute paths, paths with drive prefixes, or path traversal attempts
+    if os.path.isabs(filename) or os.path.splitdrive(filename)[0]:
+        raise ValueError(f"Security error: absolute path in dataset metadata rejected: {filename}")
     
-    # Extract
+    abs_out_dir = os.path.abspath(out_dir)
+    out_file = os.path.abspath(os.path.join(abs_out_dir, filename))
+    if os.path.commonpath([abs_out_dir, out_file]) != abs_out_dir:
+        raise ValueError(f"Security error: path traversal escape detected: {filename}")
+
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    in_zip_name = 'release_in_the_wild/' + filename
+    
+    # Extract safely
     with zf.open(in_zip_name) as f_in, open(out_file, 'wb') as f_out:
         f_out.write(f_in.read())
         
