@@ -1,0 +1,5 @@
+﻿path,label,group
+data/sample_human_1.wav,real,speaker_01
+data/sample_human_2.wav,real,speaker_02
+data/sample_clone_1.wav,fake,clone_engine_xtts
+data/sample_clone_2.wav,fake,clone_engine_elevenlabs

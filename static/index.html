@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaniShield AI — Real-Time Telecom Voice Cloning & Banking Circuit Breaker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    @keyframes pulse-red {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(1.05); }
+    }
+    .pulse-danger { animation: pulse-red 1.2s infinite; }
+    .gauge-fill { transition: width 0.4s ease-in-out, background-color 0.4s ease-in-out; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
+
+  <!-- TOP APP HEADER -->
+  <header class="border-b border-slate-800 bg-slate-900/90 px-6 py-4 flex flex-wrap items-center justify-between shadow-lg sticky top-0 z-50">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-cyan-500/20 shadow-md">
+        <i class="fa-solid fa-shield-halved text-white text-xl"></i>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-300 bg-clip-text text-transparent">
+          VaniShield AI
+        </h1>
+        <p class="text-xs text-slate-400">Team CypherEye • Real-Time Voice Cloning Defense & Banking Circuit Breaker</p>
+      </div>
+    </div>
+
+    <!-- Telemetry Status Pills -->
+    <div class="flex items-center gap-2 text-xs font-mono">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        GPU: RTX 3050 CUDA (FP16)
+      </span>
+      <span class="px-2.5 py-1 rounded-full bg-indigo-950/80 text-indigo-300 border border-indigo-800 flex items-center gap-1.5">
+        <i class="fa-solid fa-brain"></i> Jev-Omni 12B (Port 9931)
+      </span>
+      <span class="px-2.5 py-1 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-800 flex items-center gap-1.5">
+        <i class="fa-solid fa-lock"></i> DPDP Ephemeral RAM Ring Buffer
+      </span>
+    </div>
+  </header>
+
+  <!-- MAIN 3-PANEL SPLIT SCREEN -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 p-5">
+
+    <!-- PANEL 1: LIVE CALL SCREEN & ACOUSTIC FORENSICS (Cols 1-4) -->
+    <section class="lg:col-span-4 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2">
+          <i class="fa-solid fa-phone-volume text-cyan-400"></i> Panel 1: Live Call Screening
+        </h2>
+        <span id="call-status-badge" class="px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">
+          IDLE / STANDBY
+        </span>
+      </div>
+
+      <!-- Caller Profile Card -->
+      <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex items-center gap-4">
+        <div id="caller-avatar" class="w-14 h-14 rounded-full bg-slate-800 flex items-center justify-center text-xl text-slate-400">
+          <i class="fa-solid fa-user"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div id="caller-number" class="text-base font-bold font-mono text-slate-100 truncate">+91-9830112233</div>
+          <div id="caller-meta" class="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+            <span id="caller-loc"><i class="fa-solid fa-location-dot"></i> Bengaluru, KA</span>
+            <span>•</span>
+            <span id="caller-carrier" class="text-cyan-400 font-medium">Airtel Telecom</span>
+          </div>
+          <div id="voip-badge" class="hidden mt-1 inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800">
+            ⚠️ VOIP SPOOFED GATEWAY
+          </div>
+        </div>
+      </div>
+
+      <!-- DROP AUDIO FILE SECTION (TEST CUSTOM AUDIO) -->
+      <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 flex flex-col gap-2.5">
+        <div class="flex items-center justify-between">
+          <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <i class="fa-solid fa-cloud-arrow-up text-cyan-400"></i> Drop Audio for Forensic Testing:
+          </label>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+            DPDP Compliant (RAM Only)
+          </span>
+        </div>
+
+        <!-- Drag & Drop Zone -->
+        <div id="drop-zone" class="border-2 border-dashed border-slate-700 hover:border-cyan-400 bg-slate-900/60 hover:bg-slate-900/90 rounded-xl p-3.5 text-center transition-all cursor-pointer group flex flex-col items-center justify-center min-h-[90px]">
+          <input type="file" id="audio-file-input" accept="audio/*,.wav,.m4a,.mp3,.ogg,.flac,.webm,.aac" class="hidden">
+          
+          <div id="drop-idle-view" class="flex flex-col items-center gap-1.5 pointer-events-none">
+            <div class="w-9 h-9 rounded-full bg-cyan-950/80 text-cyan-400 border border-cyan-800 flex items-center justify-center text-sm group-hover:scale-110 group-hover:bg-cyan-900 transition-all">
+              <i class="fa-solid fa-file-audio"></i>
+            </div>
+            <div class="text-xs font-semibold text-slate-200 group-hover:text-cyan-300 transition">
+              Drag &amp; Drop call audio here or <span class="text-cyan-400 underline underline-offset-2">Browse</span>
+            </div>
+            <div class="text-[10px] text-slate-400">
+              Supports .m4a, .wav, .mp3, .ogg, .flac, .webm (Zero disk writes)
+            </div>
+          </div>
+
+          <div id="drop-processing-view" class="hidden flex flex-col items-center gap-2 w-full">
+            <div class="flex items-center justify-between w-full px-1 text-xs">
+              <div class="flex items-center gap-2 truncate">
+                <i class="fa-solid fa-file-audio text-cyan-400"></i>
+                <span id="uploaded-name" class="font-mono text-cyan-300 font-bold truncate max-w-[180px]">audio.m4a</span>
+                <span id="uploaded-size" class="text-[10px] text-slate-400 font-mono">(0.0 MB)</span>
+              </div>
+              <button onclick="clearUploadedFile(event)" class="text-[11px] text-slate-400 hover:text-red-400 transition ml-2 p-1">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            
+            <div id="analysis-spinner" class="flex items-center gap-2 text-xs text-indigo-300 font-mono py-0.5">
+              <i class="fa-solid fa-circle-notch fa-spin text-cyan-400"></i>
+              <span id="analysis-status-text">Running Multimodal 8-Pillar Forensics...</span>
+            </div>
+
+            <!-- In-browser audio player preview -->
+            <audio id="audio-preview-player" controls class="w-full h-7 mt-0.5 rounded text-xs"></audio>
+          </div>
+        </div>
+
+        <!-- Optional Simulated Caller Phone for Testing -->
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-[10px] text-slate-400 font-mono uppercase whitespace-nowrap">Caller ID:</span>
+          <input type="text" id="custom-caller-phone" placeholder="Optional Phone Number (e.g. +91-9830123456)" class="flex-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs font-mono focus:outline-none focus:border-cyan-500">
+        </div>
+      </div>
+
+      <!-- Presets & Simulator Controls -->
+      <div>
+        <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">Simulate Real Attack Calls:</label>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <button onclick="runPreset('en_safe')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-emerald-400 font-semibold block">🟢 English Meeting</span>
+            <span class="text-[10px] text-slate-400">Normal office reschedule</span>
+          </button>
+          <button onclick="runPreset('en_scam')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-red-400 font-semibold block">🔴 English SBI Scam</span>
+            <span class="text-[10px] text-slate-400">Demands OTP & CVV</span>
+          </button>
+          <button onclick="runPreset('bn_safe')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-emerald-400 font-semibold block">🟢 Bengali Family</span>
+            <span class="text-[10px] text-slate-400">সাধারণ পারিবারিক খোঁজ</span>
+          </button>
+          <button onclick="runPreset('bn_scam')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-red-400 font-semibold block">🔴 Bengali Bank Trap</span>
+            <span class="text-[10px] text-slate-400">অ্যাকাউন্ট স্থগিত ওটিপি</span>
+          </button>
+          <button onclick="runPreset('hi_safe')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-emerald-400 font-semibold block">🟢 Hindi Friend</span>
+            <span class="text-[10px] text-slate-400">कॉलेज असाइनमेंट चर्चा</span>
+          </button>
+          <button onclick="runPreset('hi_scam')" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-left border border-slate-700 transition">
+            <span class="text-red-400 font-semibold block">🔴 Hindi HDFC Trap</span>
+            <span class="text-[10px] text-slate-400">पैन कार्ड एटीएम पिन फ्रॉड</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Waveform Audio Canvas -->
+      <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-center">
+        <canvas id="waveform-canvas" width="340" height="60" class="w-full h-14"></canvas>
+        <div class="w-full flex justify-between text-[11px] font-mono text-slate-400 mt-1">
+          <span>Inference Latency: <strong id="latency-val" class="text-cyan-400">-- ms</strong></span>
+          <span class="text-emerald-400">Constraint: &lt; 400ms PASS</span>
+        </div>
+      </div>
+
+      <!-- Real-Time Risk Score Meter -->
+      <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
+        <div class="flex justify-between items-center mb-1.5">
+          <span class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Unified Scam Risk Score:</span>
+          <span id="risk-score-text" class="text-base font-bold font-mono text-emerald-400">0.0%</span>
+        </div>
+        <div class="w-full bg-slate-800 rounded-full h-3.5 overflow-hidden">
+          <div id="risk-score-bar" class="gauge-fill h-full bg-emerald-500 rounded-full" style="width: 0%"></div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mt-3 text-xs font-mono">
+          <div class="bg-slate-900 p-2 rounded border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">WAV2VEC2 ACOUSTIC:</span>
+            <span id="w2v-score-val" class="text-slate-200 font-bold">0.0% Fake</span>
+          </div>
+          <div class="bg-slate-900 p-2 rounded border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">JEV-OMNI INTENT:</span>
+            <span id="jev-score-val" class="text-slate-200 font-bold">0.0% Scam</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Speech Transcript with Keywords -->
+      <div class="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex flex-col min-h-[110px]">
+        <div class="text-[11px] font-semibold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+          <i class="fa-solid fa-microphone-lines text-indigo-400"></i> Faster-Whisper Streaming Transcript:
+        </div>
+        <div id="transcript-box" class="text-xs text-slate-300 italic flex-1 overflow-y-auto max-h-24 leading-relaxed">
+          "Waiting for incoming audio stream..."
+        </div>
+        <div id="keyword-tags" class="flex flex-wrap gap-1 mt-2"></div>
+      </div>
+    </section>
+
+    <!-- PANEL 2: INTERACTIVE THREAT MAP & PROSODIC DSP (Cols 5-8) -->
+    <section class="lg:col-span-4 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2">
+          <i class="fa-solid fa-earth-asia text-indigo-400"></i> Panel 2: Live Threat Map & Prosody
+        </h2>
+        <span class="text-xs font-mono text-cyan-400">Leaflet.js Geo-Intel</span>
+      </div>
+
+      <!-- Live Leaflet Threat Map -->
+      <div class="rounded-xl overflow-hidden border border-slate-800 shadow-md relative h-64 bg-slate-950">
+        <div id="map" class="w-full h-full z-10"></div>
+        <div id="map-overlay" class="absolute bottom-2 left-2 z-20 bg-slate-900/90 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-mono">
+          <span class="text-slate-400">Origin: </span><span id="map-loc-label" class="text-slate-200 font-bold">Bengaluru, India</span>
+        </div>
+      </div>
+
+      <!-- Prosodic DSP Explainable Metrics -->
+      <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex-1 flex flex-col justify-between">
+        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+          <i class="fa-solid fa-wave-square text-cyan-400"></i> Prosodic DSP Biometrics (Librosa / Parselmouth)
+        </h3>
+        <div class="grid grid-cols-2 gap-2.5 text-xs font-mono">
+          <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">PITCH (F0):</span>
+            <span id="dsp-pitch" class="text-base font-bold text-slate-100">142.5 Hz</span>
+          </div>
+          <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">ZERO CROSSING RATE:</span>
+            <span id="dsp-zcr" class="text-base font-bold text-slate-100">0.0821</span>
+          </div>
+          <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">SPECTRAL FLATNESS:</span>
+            <span id="dsp-flatness" class="text-base font-bold text-slate-100">0.00124</span>
+          </div>
+          <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+            <span class="text-slate-400 text-[10px] block">SPECTRAL CENTROID:</span>
+            <span id="dsp-centroid" class="text-base font-bold text-slate-100">1850.4 Hz</span>
+          </div>
+        </div>
+
+        <div class="mt-3 p-2.5 bg-slate-900/90 border border-slate-800 rounded-lg text-xs">
+          <div class="text-slate-400 text-[10px] uppercase font-bold">Voiceprint Recognition (SpeechBrain ECAPA-TDNN):</div>
+          <div id="voiceprint-status" class="text-slate-300 mt-0.5">
+            192-d Voiceprint vector matched. No prior scam record detected.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL 3: MOCK BANKING APP & AUTOMATED CIRCUIT BREAKER (Cols 9-12) -->
+    <section class="lg:col-span-4 bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4 shadow-xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2">
+          <i class="fa-solid fa-building-columns text-emerald-400"></i> Panel 3: Banking Circuit Breaker
+        </h2>
+        <span class="text-xs px-2 py-0.5 rounded bg-blue-950 text-blue-400 border border-blue-800 font-mono">
+          YONO / UPI Pay
+        </span>
+      </div>
+
+      <!-- Mock Banking Phone Shell -->
+      <div class="flex-1 bg-gradient-to-b from-slate-900 to-slate-950 border-2 border-slate-700 rounded-3xl p-5 shadow-2xl flex flex-col justify-between relative overflow-hidden">
+
+        <!-- Circuit Breaker Red Alert Overlay -->
+        <div id="breaker-overlay" class="hidden absolute inset-0 bg-red-950/95 backdrop-blur-md z-30 flex flex-col items-center justify-center p-6 text-center">
+          <div class="w-16 h-16 rounded-full bg-red-600 flex items-center justify-center text-white text-3xl mb-3 shadow-lg shadow-red-600/50 pulse-danger">
+            <i class="fa-solid fa-shield-virus"></i>
+          </div>
+          <h3 class="text-lg font-black text-white uppercase tracking-wider">CIRCUIT BREAKER ENGAGED!</h3>
+          <p class="text-xs text-red-200 mt-2 leading-relaxed">
+            AI Voice Cloning / Vishing Attack actively detected on the ongoing phone call.
+          </p>
+          <div class="bg-red-900/60 border border-red-700 rounded-lg p-3 mt-4 text-left w-full text-xs font-mono text-red-100">
+            <div>• UPI / IMPS Outward Transfers: <strong class="text-red-300">LOCKED</strong></div>
+            <div>• Beneficiary Additions: <strong class="text-red-300">FROZEN</strong></div>
+            <div>• Scammer Number: <strong class="text-red-300" id="blocked-num-alert">+91-140...</strong></div>
+          </div>
+          <span class="text-[10px] text-red-300/80 mt-4">RBI Fraud Mitigation Protocol Activated</span>
+        </div>
+
+        <!-- Banking Header -->
+        <div>
+          <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+                UPI
+              </div>
+              <span class="font-bold text-sm text-slate-200">State Bank of India</span>
+            </div>
+            <span class="text-xs text-slate-400 font-mono">Acct: •••• 4892</span>
+          </div>
+
+          <!-- Transaction Summary -->
+          <div class="mt-5 text-center">
+            <span class="text-xs text-slate-400 block uppercase">Requested Transfer Amount</span>
+            <div class="text-3xl font-extrabold text-white mt-1">₹65,000.00</div>
+            <div class="text-xs text-slate-400 mt-1">To: <strong class="text-slate-200">Cyber Police Security Clearance</strong></div>
+            <div class="text-[11px] text-amber-400/90 bg-amber-950/40 border border-amber-900/60 rounded p-1.5 mt-2">
+              ⚠️ Urgent payment demanded during active call
+            </div>
+          </div>
+        </div>
+
+        <!-- Payment Actions & Circuit Breaker Button -->
+        <div class="mt-6 flex flex-col gap-3">
+          <button id="pay-now-btn" class="w-full py-4 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2">
+            <i class="fa-solid fa-fingerprint"></i> Pay ₹65,000 Now
+          </button>
+          <button class="w-full py-2.5 rounded-xl text-xs font-semibold text-slate-400 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 transition">
+            Cancel Transaction
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- JAVASCRIPT LOGIC -->
+  <script>
+    // Initialize Leaflet Map
+    const map = L.map('map', { zoomControl: false }).setView([22.5726, 88.3639], 5);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    let activeMarker = null;
+
+    function setMapPin(lat, lon, label, isDanger) {
+      if (activeMarker) map.removeLayer(activeMarker);
+      const iconHtml = isDanger ?
+        `<div class="w-6 h-6 rounded-full bg-red-600 border-2 border-white pulse-danger flex items-center justify-center text-white text-[10px]"><i class="fa-solid fa-triangle-exclamation"></i></div>` :
+        `<div class="w-5 h-5 rounded-full bg-emerald-500 border-2 border-white shadow flex items-center justify-center text-white text-[8px]"><i class="fa-solid fa-check"></i></div>`;
+      const customIcon = L.divIcon({ html: iconHtml, className: '' });
+      activeMarker = L.marker([lat, lon], { icon: customIcon }).addTo(map);
+      map.flyTo([lat, lon], isDanger ? 6 : 8, { duration: 1.5 });
+      document.getElementById("map-loc-label").innerText = label;
+    }
+    setMapPin(12.9716, 77.5946, "Bengaluru, Karnataka", false);
+
+    // Waveform simulation on Canvas
+    const canvas = document.getElementById("waveform-canvas");
+    const ctx = canvas.getContext("2d");
+    let waveOffset = 0;
+    let waveActive = false;
+
+    function drawWaveform() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = waveActive ? "#06b6d4" : "#334155";
+      ctx.beginPath();
+      const height = canvas.height / 2;
+      for (let x = 0; x < canvas.width; x++) {
+        const amp = waveActive ? 18 : 2;
+        const y = height + Math.sin((x * 0.05) + waveOffset) * amp * Math.cos(x * 0.02);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      if (waveActive) waveOffset += 0.2;
+      requestAnimationFrame(drawWaveform);
+    }
+    drawWaveform();
+
+    // Preset Call Simulator
+    async function runPreset(presetId) {
+      waveActive = true;
+      document.getElementById("call-status-badge").innerText = "ANALYZING CALL...";
+      document.getElementById("call-status-badge").className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-cyan-950 text-cyan-400 border border-cyan-800";
+
+      try {
+        const response = await fetch(`/api/simulate/${presetId}`);
+        const data = await response.json();
+        renderEvaluationResult(data);
+      } catch (err) {
+        console.error("Simulation error:", err);
+      }
+    }
+
+    function renderEvaluationResult(res) {
+      waveActive = false;
+      document.getElementById("latency-val").innerText = `${res.latency_ms} ms`;
+
+      // Caller Profile Header
+      const avatarEl = document.getElementById("caller-avatar");
+      if (res.filename) {
+        document.getElementById("caller-number").innerText = res.filename;
+        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-file-audio text-cyan-400"></i> ${res.duration_seconds}s Audio File`;
+        document.getElementById("caller-carrier").innerText = res.w2v_fake_prob >= 50.0 ? "AI Neural Voice Model" : "Authentic Human Voice";
+        avatarEl.innerHTML = res.w2v_fake_prob >= 50.0 ? `<i class="fa-solid fa-robot text-red-400"></i>` : `<i class="fa-solid fa-user-check text-emerald-400"></i>`;
+      } else {
+        document.getElementById("caller-number").innerText = res.telecom.phone_number;
+        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-location-dot"></i> ${res.telecom.location}`;
+        document.getElementById("caller-carrier").innerText = res.telecom.carrier;
+        avatarEl.innerHTML = res.circuit_breaker.engaged ? `<i class="fa-solid fa-triangle-exclamation text-red-400"></i>` : `<i class="fa-solid fa-user text-slate-300"></i>`;
+      }
+
+      // VoIP Badge
+      const voipBadge = document.getElementById("voip-badge");
+      if (res.telecom.is_voip_spoofed) {
+        voipBadge.classList.remove("hidden");
+      } else {
+        voipBadge.classList.add("hidden");
+      }
+
+      // Map pin
+      const coords = res.telecom.coordinates || [20.5937, 78.9629];
+      setMapPin(coords[0], coords[1], res.telecom.location, res.circuit_breaker.engaged);
+
+      // Risk Gauges & Labels (Safely parse and format numeric value)
+      const riskNum = (typeof res.unified_risk_score === 'number' && !isNaN(res.unified_risk_score))
+        ? res.unified_risk_score
+        : ((res.circuit_breaker && res.circuit_breaker.engaged) ? 99.0 : 0.0);
+      const riskClamped = Math.min(100.0, Math.max(0.0, riskNum));
+      const riskText = riskClamped.toFixed(1);
+      
+      const riskScoreEl = document.getElementById("risk-score-text");
+      const riskBar = document.getElementById("risk-score-bar");
+      riskScoreEl.innerText = `${riskText}%`;
+      riskBar.style.width = `${riskClamped}%`;
+
+      // Acoustic Ear Display
+      const w2vScoreEl = document.getElementById("w2v-score-val");
+      const w2vVal = Number(res.w2v_fake_prob ?? 0);
+      if (w2vVal >= 50.0) {
+        w2vScoreEl.innerHTML = `<span class="text-red-400 font-bold">${w2vVal.toFixed(1)}% AI Clone</span>`;
+      } else {
+        const realConf = (100.0 - w2vVal).toFixed(1);
+        w2vScoreEl.innerHTML = `<span class="text-emerald-400 font-bold">${realConf}% Real Human</span>`;
+      }
+
+      // Context Intent Display
+      const jevScoreEl = document.getElementById("jev-score-val");
+      const jevVal = Number(res.jev_scam_prob ?? 0);
+      if (jevVal >= 70.0) {
+        jevScoreEl.innerHTML = `<span class="text-red-400 font-bold">${jevVal.toFixed(1)}% Scam Intent</span>`;
+      } else if (jevVal >= 35.0) {
+        jevScoreEl.innerHTML = `<span class="text-amber-400 font-bold">${jevVal.toFixed(1)}% Suspicious</span>`;
+      } else {
+        const benignConf = (100.0 - jevVal).toFixed(1);
+        jevScoreEl.innerHTML = `<span class="text-emerald-400 font-bold">${benignConf}% Benign</span>`;
+      }
+
+      // Multi-tier Threat Classification Badge & Gauge Color
+      const statusBadge = document.getElementById("call-status-badge");
+      const isCritical = riskClamped >= 70.0 || (res.circuit_breaker && res.circuit_breaker.engaged);
+      const isModerate = riskClamped >= 40.0 && riskClamped < 70.0;
+
+      if (isCritical) {
+        riskBar.className = "gauge-fill h-full bg-red-600 rounded-full transition-all duration-500";
+        riskScoreEl.className = "text-base font-bold font-mono text-red-400";
+        if (w2vVal >= 50.0 && jevVal >= 70.0) {
+          statusBadge.innerText = "RED ALERT: AI CLONE & FINANCIAL SCAM";
+        } else if (w2vVal >= 50.0) {
+          statusBadge.innerText = "RED ALERT: AI VOICE CLONE DETECTED";
+        } else {
+          statusBadge.innerText = "RED ALERT: FINANCIAL SCAM (HUMAN FRAUDSTER)";
+        }
+        statusBadge.className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-red-950 text-red-400 border border-red-800 pulse-danger";
+      } else if (isModerate) {
+        riskBar.className = "gauge-fill h-full bg-amber-500 rounded-full transition-all duration-500";
+        riskScoreEl.className = "text-base font-bold font-mono text-amber-400";
+        statusBadge.innerText = "AMBER ALERT: SUSPICIOUS CALL (ELEVATED RISK)";
+        statusBadge.className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-amber-950 text-amber-400 border border-amber-800";
+      } else {
+        riskBar.className = "gauge-fill h-full bg-emerald-500 rounded-full transition-all duration-500";
+        riskScoreEl.className = "text-base font-bold font-mono text-emerald-400";
+        statusBadge.innerText = "GREEN: SAFE CALL (AUTHENTIC HUMAN)";
+        statusBadge.className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800";
+      }
+
+      // Update upload status box text if upload was performed
+      const statusText = document.getElementById("analysis-status-text");
+      if (statusText && res.filename) {
+        if (isCritical) {
+          if (w2vVal >= 50.0 && jevVal >= 70.0) {
+            statusText.innerHTML = `<span class="text-red-400 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> AI Voice Clone & Financial Scam Detected! (${w2vVal.toFixed(1)}% synthetic clone)</span>`;
+          } else if (w2vVal >= 50.0) {
+            statusText.innerHTML = `<span class="text-red-400 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> AI Voice Clone Detected (${w2vVal.toFixed(1)}% synthetic confidence)</span>`;
+          } else {
+            statusText.innerHTML = `<span class="text-red-400 font-semibold"><i class="fa-solid fa-shield-halved"></i> Real Human Scammer / Financial Vishing Attack (${jevVal.toFixed(1)}% Scam Intent)</span>`;
+          }
+        } else if (isModerate) {
+          statusText.innerHTML = `<span class="text-amber-400 font-semibold"><i class="fa-solid fa-triangle-exclamation"></i> Suspicious / Ambiguous Call Detected (${riskText}% Scam Risk)</span>`;
+        } else {
+          const realPct = (100.0 - w2vVal).toFixed(1);
+          statusText.innerHTML = `<span class="text-emerald-400 font-semibold"><i class="fa-solid fa-circle-check"></i> Authentic Human Voice Verified (${realPct}% human confidence)</span>`;
+        }
+      }
+
+      // Transcript
+      document.getElementById("transcript-box").innerText = res.transcript ? `"${res.transcript}"` : `"(No clear speech detected / Silence)"`;
+      const tagsContainer = document.getElementById("keyword-tags");
+      tagsContainer.innerHTML = "";
+      if (res.flagged_keywords && res.flagged_keywords.length > 0) {
+        res.flagged_keywords.forEach(kw => {
+          const span = document.createElement("span");
+          span.className = "px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-950 text-red-300 border border-red-800";
+          span.innerText = `🚨 ${kw}`;
+          tagsContainer.appendChild(span);
+        });
+      } else {
+        const span = document.createElement("span");
+        span.className = "px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-900 text-slate-400 border border-slate-800";
+        span.innerText = `0 Scam Keywords Detected`;
+        tagsContainer.appendChild(span);
+      }
+
+      // Prosodic DSP
+      if (res.dsp_metrics && !res.dsp_metrics.error) {
+        document.getElementById("dsp-pitch").innerText = `${res.dsp_metrics.pitch_f0_hz} Hz`;
+        document.getElementById("dsp-zcr").innerText = `${res.dsp_metrics.zero_crossing_rate}`;
+        document.getElementById("dsp-flatness").innerText = `${res.dsp_metrics.spectral_flatness}`;
+        document.getElementById("dsp-centroid").innerText = `${res.dsp_metrics.spectral_centroid_hz} Hz`;
+      }
+
+      // Circuit Breaker Control
+      const overlay = document.getElementById("breaker-overlay");
+      const payBtn = document.getElementById("pay-now-btn");
+
+      if (res.circuit_breaker.engaged) {
+        overlay.classList.remove("hidden");
+        document.getElementById("blocked-num-alert").innerText = res.telecom.phone_number || res.filename || "Suspicious Audio";
+        payBtn.disabled = true;
+        payBtn.className = "w-full py-4 rounded-xl font-bold text-sm text-slate-400 bg-slate-800 cursor-not-allowed border border-slate-700";
+        payBtn.innerHTML = `<i class="fa-solid fa-lock"></i> BANKING LOCKED: FRAUD DETECTED`;
+      } else {
+        overlay.classList.add("hidden");
+        payBtn.disabled = false;
+        payBtn.className = "w-full py-4 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2";
+        payBtn.innerHTML = `<i class="fa-solid fa-fingerprint"></i> Pay ₹65,000 Now`;
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // DRAG AND DROP AUDIO UPLOAD HANDLER
+    // -----------------------------------------------------------------
+    const dropZone = document.getElementById("drop-zone");
+    const fileInput = document.getElementById("audio-file-input");
+    const idleView = document.getElementById("drop-idle-view");
+    const activeView = document.getElementById("drop-processing-view");
+    const uploadedName = document.getElementById("uploaded-name");
+    const uploadedSize = document.getElementById("uploaded-size");
+    const spinner = document.getElementById("analysis-spinner");
+    const statusText = document.getElementById("analysis-status-text");
+    const audioPlayer = document.getElementById("audio-preview-player");
+    const phoneInput = document.getElementById("custom-caller-phone");
+
+    dropZone.addEventListener("click", (e) => {
+      // Don't re-trigger if clicking audio player controls or delete button
+      if (e.target.closest("audio") || e.target.closest("button")) return;
+      fileInput.click();
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) {
+        processUploadedAudio(e.target.files[0]);
+      }
+    });
+
+    // Drag-over styling
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add("border-cyan-400", "bg-cyan-950/30");
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove("border-cyan-400", "bg-cyan-950/30");
+      }, false);
+    });
+
+    dropZone.addEventListener("drop", (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        processUploadedAudio(files[0]);
+      }
+    });
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(2) + ' MB';
+    }
+
+    function clearUploadedFile(event) {
+      if (event) {
+        event.stopPropagation();
+      }
+      fileInput.value = "";
+      audioPlayer.pause();
+      audioPlayer.src = "";
+      activeView.classList.add("hidden");
+      idleView.classList.remove("hidden");
+      document.getElementById("call-status-badge").innerText = "IDLE / STANDBY";
+      document.getElementById("call-status-badge").className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800";
+    }
+
+    async function processUploadedAudio(file) {
+      // Show file info & audio player
+      uploadedName.innerText = file.name;
+      uploadedSize.innerText = `(${formatFileSize(file.size)})`;
+      audioPlayer.src = URL.createObjectURL(file);
+      idleView.classList.add("hidden");
+      activeView.classList.remove("hidden");
+      spinner.classList.remove("hidden");
+      statusText.innerText = "Analyzing 8-Pillar Forensics & Intent...";
+
+      waveActive = true;
+      document.getElementById("call-status-badge").innerText = "ANALYZING AUDIO...";
+      document.getElementById("call-status-badge").className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-cyan-950 text-cyan-400 border border-cyan-800 animate-pulse";
+
+      const formData = new FormData();
+      formData.append("file", file);
+      const callerNumber = (phoneInput && phoneInput.value.trim()) ? phoneInput.value.trim() : "";
+      if (callerNumber) {
+        formData.append("phone_number", callerNumber);
+      }
+
+      try {
+        const response = await fetch("/api/evaluate/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || "Upload analysis failed");
+        }
+
+        const data = await response.json();
+        spinner.classList.add("hidden");
+        renderEvaluationResult(data);
+      } catch (err) {
+        console.error("Audio evaluation error:", err);
+        statusText.innerText = `Error: ${err.message}`;
+        waveActive = false;
+        document.getElementById("call-status-badge").innerText = "ERROR IN ANALYSIS";
+        document.getElementById("call-status-badge").className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-red-950 text-red-400 border border-red-800";
+      }
+    }
+  </script>
+</body>
+</html>
