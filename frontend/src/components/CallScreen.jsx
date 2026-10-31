@@ -21,18 +21,25 @@ export default function CallScreen({ telemetry, onSimulateScam, onSimulateSafe, 
               <p className="text-xs text-gray-400">Low-Latency Acoustic & Intent Interceptor</p>
             </div>
           </div>
-          <span className={`px-2.5 py-1 text-xs font-semibold rounded-full flex items-center gap-1.5 ${
-            !isStreaming
-              ? 'bg-gray-500/20 text-gray-400 border border-gray-500/40'
-              : isScam
-              ? 'bg-red-500/20 text-red-400 border border-red-500/40'
-              : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-          }`}>
-            <span className={`w-2 h-2 rounded-full ${
-              !isStreaming ? 'bg-gray-400' : isScam ? 'bg-red-400 animate-ping' : 'bg-emerald-400'
-            }`}></span>
-            {!isStreaming ? 'STANDBY / OFFLINE' : isScam ? 'SCAM DETECTED' : 'SECURE CALL'}
-          </span>
+          <div className="flex items-center gap-2">
+            {!isStreaming && (
+              <span className="px-2 py-0.5 text-[10px] font-medium text-gray-400 bg-gray-800/60 rounded border border-gray-700/50">
+                DISCONNECTED
+              </span>
+            )}
+            <span className={`px-2.5 py-1 text-xs font-semibold rounded-full flex items-center gap-1.5 ${
+              isScam
+                ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                : !isStreaming
+                ? 'bg-gray-500/20 text-gray-400 border border-gray-500/40'
+                : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${
+                isScam ? 'bg-red-400 animate-ping' : !isStreaming ? 'bg-gray-400' : 'bg-emerald-400'
+              }`}></span>
+              {isScam ? 'SCAM DETECTED' : !isStreaming ? 'STANDBY / IDLE' : 'SECURE CALL'}
+            </span>
+          </div>
         </div>
 
         {/* Caller Telecom Profile */}

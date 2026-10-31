@@ -50,7 +50,11 @@ async def websocket_live_call(websocket: WebSocket):
         "type": "SESSION_INIT",
         "session_id": session_id,
         "caller": caller_info,
-        "circuit_breaker": banking_state.locked
+        "circuit_breaker": banking_state.locked,
+        "circuit_breaker_locked": banking_state.locked,
+        "locked": banking_state.locked,
+        "reason": banking_state.reason,
+        "risk_score": banking_state.risk_score
     }))
 
     try:

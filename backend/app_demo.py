@@ -1,3 +1,7 @@
+try:
+    from backend.api.banking_hold import router as banking_router, state as banking_state
+except ImportError:
+    from api.banking_hold import router as banking_router, state as banking_state
 """
 
 VaniShield AI — Production FastAPI Server & Real-Time Threat Intelligence Engine
@@ -23,6 +27,7 @@ Integrates:
 
 
 import os
+import hmac
 
 import sys
 
@@ -84,7 +89,7 @@ import torch
 
 import torchaudio
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form, Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -137,6 +142,8 @@ app = FastAPI(
     version="2.0.0"
 
 )
+app.include_router(banking_router)
+
 
 
 
@@ -348,17 +355,18 @@ def _sync_simulate_preset(preset: dict) -> dict:
 
 
 
-    return core_engine.evaluate_live_call(
-
+    result = core_engine.evaluate_live_call(
         audio_chunk_16k=audio_np,
-
         phone_number=preset["phone"],
-
         known_transcript=preset["transcript"],
-
         is_upload=True
-
     )
+    cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = result.get("unified_risk_score", 95.0)
+        banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+    return result
 
 
 
@@ -518,6 +526,12 @@ def _sync_evaluate_audio(content: bytes, phone_number: str, transcript: Optional
 
     result["duration_seconds"] = round(len(audio_np) / 16000.0, 2)
 
+    cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = result.get("unified_risk_score", 95.0)
+        banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+
     return result
 
 
@@ -676,8 +690,6 @@ async def live_call_websocket(websocket: WebSocket):
 
     # Isolated caller identity per connection (Issue #3)
 
-    # Default to an inbound caller identity specific to this session, allowing client overrides
-
     caller_phone = (
 
         websocket.query_params.get("phone")
@@ -687,6 +699,25 @@ async def live_call_websocket(websocket: WebSocket):
         or f"+91-0000000000 (Live Call {session_id[-6:]})"
 
     )
+
+    # Send initial SESSION_INIT handshake frame carrying circuit breaker state
+    try:
+        await websocket.send_text(json.dumps({
+            "type": "SESSION_INIT",
+            "session_id": session_id,
+            "caller": {
+                "number": caller_phone,
+                "carrier": "VoIP / Cellular Gateway",
+                "location": "National / Metro Node"
+            },
+            "circuit_breaker": banking_state.locked,
+            "circuit_breaker_locked": banking_state.locked,
+            "locked": banking_state.locked,
+            "reason": banking_state.reason,
+            "risk_score": banking_state.risk_score
+        }))
+    except Exception as e:
+        logger.warning(f"Failed to send SESSION_INIT: {e}")
 
 
 
@@ -746,6 +777,12 @@ async def live_call_websocket(websocket: WebSocket):
 
 
 
+                cb_engaged = bool(eval_result.get("circuit_breaker", {}).get("engaged", False))
+                if cb_engaged and not banking_state.locked:
+                    banking_state.locked = True
+                    banking_state.risk_score = eval_result.get("unified_risk_score", 95.0)
+                    banking_state.reason = f"Automated Defense: {eval_result.get('threat_type', 'Scam detected')}"
+
                 # 4. Stream analysis back to client
 
                 await websocket.send_json(eval_result)
@@ -758,7 +795,48 @@ async def live_call_websocket(websocket: WebSocket):
 
                 action = data.get("action")
 
-                if action == "SET_CALLER":
+                if action == "SIMULATE_SCAM_CALL":
+                    banking_state.locked = True
+                    banking_state.risk_score = 97.9
+                    banking_state.reason = "Automated Defense: High-Risk AI Voice Clone & Financial Vishing Attack Intercepted."
+                    await websocket.send_json({
+                        "type": "TELEMETRY_FRAME",
+                        "session_id": session_id,
+                        "acoustic_clone": 99.4,
+                        "intent_scam": 96.0,
+                        "unified_risk": 97.9,
+                        "threat_level": "CRITICAL SCAM (LOCKED)",
+                        "circuit_breaker_locked": True,
+                        "transcript": "Urgent security notice from State Bank of India fraud team. Share your 6-digit OTP and CVV immediately to block illegal debit.",
+                        "caller_geo": {
+                            "number": caller_phone,
+                            "carrier": "Virtual VoIP Gateway (Flagged)",
+                            "city": "Jamtara / Cyber Node",
+                            "lat": 23.9632,
+                            "lon": 86.8029,
+                            "is_scam": True
+                        }
+                    })
+                elif action == "SIMULATE_SAFE_CALL":
+                    await websocket.send_json({
+                        "type": "TELEMETRY_FRAME",
+                        "session_id": session_id,
+                        "acoustic_clone": 0.2,
+                        "intent_scam": 0.0,
+                        "unified_risk": 0.1,
+                        "threat_level": "AUTHENTIC (SAFE)",
+                        "circuit_breaker_locked": banking_state.locked,
+                        "transcript": "Hi Rahul, are we still meeting for lunch today at 1 PM? Let me know when you reach.",
+                        "caller_geo": {
+                            "number": caller_phone,
+                            "carrier": "Reliance Jio Infocomm",
+                            "city": "Bengaluru Circle",
+                            "lat": 12.9716,
+                            "lon": 77.5946,
+                            "is_scam": False
+                        }
+                    })
+                elif action == "SET_CALLER":
 
                     new_phone = data.get("phone") or data.get("caller_id")
 
@@ -850,6 +928,8 @@ class SynthesizeRequest(BaseModel):
 
     use_known_transcript: Optional[bool] = False
 
+    access_token: Optional[str] = None
+
 
 
 @app.get("/api/stt/status")
@@ -874,10 +954,36 @@ async def get_stt_status():
 
 MAX_TTS_TEXT_LENGTH = 500
 _tts_lock = threading.Lock()
-_tts_timestamps = []
-MAX_TTS_PER_MINUTE = 10
+_tts_timestamps = []  # global sliding-window timestamps
+_tts_ip_timestamps: dict = {}  # per-IP sliding-window timestamps
+MAX_TTS_PER_MINUTE = 10          # global cap: calls per minute
+MAX_TTS_PER_IP_PER_MINUTE = 5   # per-source-IP cap: calls per minute
 
-def _check_tts_budget_and_length(text: str):
+
+def _check_tts_access(request: Request, body_token: Optional[str] = None) -> None:
+    """Verify authorization before allowing speech synthesis via paid ElevenLabs quota."""
+    expected = (
+        os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+        or os.environ.get("VANISHIELD_API_KEY", "").strip()
+        or os.environ.get("VANISHIELD_BANKING_PIN", "").strip()
+        or os.environ.get("VANISHIELD_UNLOCK_PIN", "").strip()
+        or "1234"
+    )
+
+    provided = (
+        request.headers.get("X-TTS-Token")
+        or request.headers.get("Authorization", "").replace("Bearer ", "")
+        or (body_token or "")
+    ).strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
+        )
+
+
+def _check_tts_budget_and_length(text: str, request: Request = None) -> None:
+    """Enforce text-length bound and sliding-window rate limits (global + per-IP)."""
     stripped = text.strip()
     if not stripped:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
@@ -887,14 +993,25 @@ def _check_tts_budget_and_length(text: str):
             detail=f"Text exceeds maximum permitted length ({MAX_TTS_TEXT_LENGTH} characters)."
         )
     now = time.time()
+    client_ip = (request.client.host if request and request.client else "unknown")
     with _tts_lock:
+        # Global rate limit
         _tts_timestamps[:] = [t for t in _tts_timestamps if now - t < 60.0]
         if len(_tts_timestamps) >= MAX_TTS_PER_MINUTE:
             raise HTTPException(
                 status_code=429,
                 detail="TTS generation rate limit / budget quota reached. Please try again in 1 minute."
             )
+        # Per-IP rate limit
+        ip_ts = _tts_ip_timestamps.setdefault(client_ip, [])
+        ip_ts[:] = [t for t in ip_ts if now - t < 60.0]
+        if len(ip_ts) >= MAX_TTS_PER_IP_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Per-client TTS rate limit reached. Maximum {MAX_TTS_PER_IP_PER_MINUTE} requests per minute."
+            )
         _tts_timestamps.append(now)
+        ip_ts.append(now)
 
 
 @app.get("/api/tts/voices")
@@ -922,7 +1039,7 @@ async def get_tts_voices():
 
 @app.post("/api/tts/synthesize")
 
-async def tts_synthesize(req: SynthesizeRequest):
+async def tts_synthesize(req: SynthesizeRequest, request: Request):
 
     """Generates audio for given text via ElevenLabs API (or fallback) and streams audio/mpeg."""
 
@@ -932,13 +1049,11 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    _check_tts_access(request, req.access_token)
 
 
 
-    _check_tts_budget_and_length(req.text)
+    _check_tts_budget_and_length(req.text, request)
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
         ANALYSIS_EXECUTOR,
@@ -965,7 +1080,7 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 @app.post("/api/tts/simulate-attack")
 
-async def tts_simulate_attack(req: SynthesizeRequest):
+async def tts_simulate_attack(req: SynthesizeRequest, request: Request):
 
     """
 
@@ -981,13 +1096,11 @@ async def tts_simulate_attack(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    _check_tts_access(request, req.access_token)
 
 
 
-    _check_tts_budget_and_length(req.text)
+    _check_tts_budget_and_length(req.text, request)
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
         ANALYSIS_EXECUTOR,

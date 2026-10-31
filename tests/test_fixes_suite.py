@@ -154,10 +154,11 @@ class TestVaniShieldFixes(unittest.TestCase):
         engine.blacklist = {}
         engine.jev_head_trained = False
         engine.w2v_model_path = None
+        engine.demo_scorer = None
 
         # Simulate ASR failure (e.g. timeout or exception during speech recognition)
         engine.transcribe_and_spot_keywords = MagicMock(
-            return_value=("", [], "ASR model timeout / inference crash")
+            return_value=("", [], "ASR model timeout / inference crash", "en")
         )
         engine.analyze_telecom = MagicMock(
             return_value={"is_blacklisted": False, "is_voip_spoofed": False, "location": "Bengaluru"}
@@ -214,6 +215,43 @@ class TestVaniShieldFixes(unittest.TestCase):
             self.assertTrue(is_bl)
             self.assertEqual(bl_data["caller_hash"], h)
 
+            # Verify backward compatibility with legacy-hashed records.
+            # Use a SEPARATE temp file with ONLY the legacy record so the canonical
+            # hash key (h) is absent and is_blacklisted must reach the legacy fallback
+            # path to succeed — without this isolation the test always hits the
+            # canonical record first and the legacy path is never exercised.
+            h_legacy = ct.hash_caller_identity_legacy(test_phone)
+            import json, tempfile as _tmpmod
+            with _tmpmod.NamedTemporaryFile(suffix=".json", delete=False) as tf2:
+                temp_bl_legacy = tf2.name
+            try:
+                legacy_only = {h_legacy: {"caller_hash": h_legacy, "phone_masked": "+919****6655", "risk_score": 90.0}}
+                with open(temp_bl_legacy, "w", encoding="utf-8") as f:
+                    json.dump(legacy_only, f)
+                ct.BLACKLIST_PATH = temp_bl_legacy
+                is_bl_legacy, bl_data_legacy = ct.is_blacklisted(test_phone)
+                self.assertTrue(is_bl_legacy, "Legacy hash backward-compat lookup must succeed")
+                self.assertEqual(bl_data_legacy["caller_hash"], h_legacy,
+                                 "Returned record must be the legacy-keyed entry")
+
+                # Verify that even when VANISHIELD_HMAC_SECRET is set and differs from VANISHIELD_SALT,
+                # the legacy record saved with VANISHIELD_SALT is still correctly matched (Issue #1)
+                old_hmac_secret = os.environ.get("VANISHIELD_HMAC_SECRET")
+                try:
+                    os.environ["VANISHIELD_HMAC_SECRET"] = "new-different-hmac-secret-999"
+                    is_bl_migrated, bl_data_migrated = ct.is_blacklisted(test_phone)
+                    self.assertTrue(is_bl_migrated, "Must match legacy record even when VANISHIELD_HMAC_SECRET differs from VANISHIELD_SALT")
+                    self.assertEqual(bl_data_migrated["caller_hash"], h_legacy)
+                finally:
+                    if old_hmac_secret is not None:
+                        os.environ["VANISHIELD_HMAC_SECRET"] = old_hmac_secret
+                    else:
+                        os.environ.pop("VANISHIELD_HMAC_SECRET", None)
+            finally:
+                ct.BLACKLIST_PATH = temp_bl  # restore to canonical temp file
+                if os.path.exists(temp_bl_legacy):
+                    os.remove(temp_bl_legacy)
+
         finally:
             ct.BLACKLIST_PATH = old_bl
             if os.path.exists(temp_bl):
@@ -247,6 +285,115 @@ class TestVaniShieldFixes(unittest.TestCase):
             self.assertFalse(state.locked)
         finally:
             loop.close()
+
+
+    def test_tts_authorization_and_transfer_lock(self):
+        """Verify TTS routes require authorization when configured and transfer is blocked when locked."""
+        import asyncio
+        from fastapi import HTTPException
+        from backend.api.evaluate import check_tts_access, check_tts_budget_and_length
+        from backend.api.banking_hold import simulate_transfer, TransferRequest, state
+
+        class MockRequest:
+            def __init__(self, headers=None, host="127.0.0.1"):
+                self.headers = headers or {}
+                self.client = type("Client", (), {"host": host})()
+
+        # 1. Test TTS authorization enforcement
+        old_token = os.environ.get("TTS_ACCESS_TOKEN")
+        try:
+            os.environ["TTS_ACCESS_TOKEN"] = "secure-secret-token"
+            req_no_auth = MockRequest()
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_access(req_no_auth)
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            req_wrong = MockRequest({"X-TTS-Token": "wrong-token"})
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_access(req_wrong)
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            req_valid = MockRequest({"X-TTS-Token": "secure-secret-token"})
+            check_tts_access(req_valid)
+
+            check_tts_access(req_no_auth, body_token="secure-secret-token")
+
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_budget_and_length("a" * 501, req_valid)
+            self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            if old_token is not None:
+                os.environ["TTS_ACCESS_TOKEN"] = old_token
+            else:
+                os.environ.pop("TTS_ACCESS_TOKEN", None)
+
+        # 2. Test transfer lock enforcement
+        state.locked = True
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                loop.run_until_complete(simulate_transfer(TransferRequest(payee="Electricity", amount=1500.0)))
+            self.assertEqual(ctx.exception.status_code, 423)
+
+            state.locked = False
+            tx_res = loop.run_until_complete(simulate_transfer(TransferRequest(payee="Electricity", amount=1500.0)))
+            self.assertTrue(tx_res["success"])
+        finally:
+            loop.close()
+
+        # 3. Test real audio evaluation trips banking_state.locked (Issue #5)
+        from backend.api.evaluate import _sync_evaluate_audio
+        import backend.api.evaluate as ev_mod
+        from unittest.mock import MagicMock
+        state.locked = False
+        saved_engine = ev_mod.core_engine
+        try:
+            mock_eng = MagicMock()
+            mock_eng.evaluate_live_call = MagicMock(return_value={
+                "circuit_breaker": {"engaged": True},
+                "unified_risk_score": 98.0,
+                "threat_type": "AI_CLONE_AND_FINANCIAL_SCAM"
+            })
+            ev_mod.core_engine = mock_eng
+            saved_loader = ev_mod.load_audio_as_16k_np
+            ev_mod.load_audio_as_16k_np = MagicMock(return_value=np.zeros(16000, dtype=np.float32))
+            try:
+                res = _sync_evaluate_audio(b"dummy_wav", "+91-1409988776", None)
+            finally:
+                ev_mod.load_audio_as_16k_np = saved_loader
+            self.assertTrue(state.locked, "Real audio evaluation tripping circuit breaker must set banking state locked to True")
+            self.assertEqual(state.risk_score, 98.0)
+        finally:
+            ev_mod.core_engine = saved_engine
+            state.locked = False
+
+        # 4. Test simulate preset trips banking_state.locked
+        from backend.api.evaluate import _sync_simulate_preset
+        state.locked = False
+        saved_engine = ev_mod.core_engine
+        try:
+            mock_eng = MagicMock()
+            mock_eng.evaluate_live_call = MagicMock(return_value={
+                "circuit_breaker": {"engaged": True},
+                "unified_risk_score": 96.5,
+                "threat_type": "AI_VOICE_CLONE_FINANCIAL_SCAM"
+            })
+            ev_mod.core_engine = mock_eng
+            saved_loader = ev_mod.load_audio_as_16k_np
+            ev_mod.load_audio_as_16k_np = MagicMock(return_value=np.zeros(16000, dtype=np.float32))
+            saved_exists = os.path.exists
+            os.path.exists = MagicMock(return_value=True)
+            try:
+                preset = {"audio_file": "dummy.wav", "phone": "+91-1409988776", "transcript": "OTP request"}
+                res = _sync_simulate_preset(preset)
+            finally:
+                ev_mod.load_audio_as_16k_np = saved_loader
+                os.path.exists = saved_exists
+            self.assertTrue(state.locked, "Simulate preset tripping circuit breaker must set banking state locked to True")
+            self.assertEqual(state.risk_score, 96.5)
+        finally:
+            ev_mod.core_engine = saved_engine
+            state.locked = False
 
 if __name__ == "__main__":
     unittest.main()

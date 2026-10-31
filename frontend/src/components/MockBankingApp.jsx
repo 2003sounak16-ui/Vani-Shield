@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Landmark, Lock, Unlock, ArrowRight, ShieldCheck, AlertOctagon, CheckCircle2 } from 'lucide-react';
+import { Landmark, Lock, Unlock, ArrowRight, ShieldCheck, AlertOctagon, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
   const [amount, setAmount] = useState('45000');
@@ -9,12 +9,50 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
   const [pinInput, setPinInput] = useState('');
 
   const isLocked = bankingState?.locked;
+  const isInitialized = bankingState?.initialized !== false;
 
-  const handlePay = () => {
-    if (isLocked) return;
-    const res = onTransfer ? onTransfer(payee, amount) : { success: true };
-    setTransferMsg(`Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
-    setTimeout(() => setTransferMsg(null), 4000);
+  const [transferError, setTransferError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handlePay = async () => {
+    if (!isInitialized || isLocked || isSubmitting) return;
+    setIsSubmitting(true);
+    setTransferError(null);
+    try {
+      if (onTransfer) {
+        const res = await onTransfer(payee, amount);
+        if (res && res.success) {
+          setTransferMsg(res.message || `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
+          setTimeout(() => setTransferMsg(null), 4000);
+        } else {
+          setTransferError(res?.message || 'Transaction rejected: Circuit breaker or banking policy engaged.');
+          setTimeout(() => setTransferError(null), 5000);
+        }
+      } else {
+        // Direct server API invocation when onTransfer callback is omitted
+        const host = window.location.hostname || '127.0.0.1';
+        const port = (window.location.port === '5173' || window.location.port === '3000' || !window.location.port) ? '8000' : window.location.port;
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const res = await fetch(`${protocol}//${host}:${port}/api/banking/simulate-transfer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payee, amount: parseFloat(amount) || 0, pin: '1234' })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setTransferMsg(data.message || `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
+          setTimeout(() => setTransferMsg(null), 4000);
+        } else {
+          setTransferError(data.detail || data.message || 'Transaction blocked by banking circuit breaker.');
+          setTimeout(() => setTransferError(null), 5000);
+        }
+      }
+    } catch (err) {
+      setTransferError('Transaction rejected: Unable to communicate with banking service.');
+      setTimeout(() => setTransferError(null), 5000);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleUnlockSubmit = async (e) => {
@@ -24,6 +62,27 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
       if (ok !== false) {
         setShowPinModal(false);
         setPinInput('');
+      }
+    } else {
+      // Direct server unlock when onUnlock callback is omitted
+      try {
+        const host = window.location.hostname || '127.0.0.1';
+        const port = (window.location.port === '5173' || window.location.port === '3000' || !window.location.port) ? '8000' : window.location.port;
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const res = await fetch(`${protocol}//${host}:${port}/api/banking/unlock`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: pinInput || '1234' })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setShowPinModal(false);
+          setPinInput('');
+        } else {
+          alert(data.detail || data.message || 'Invalid Security PIN.');
+        }
+      } catch (err) {
+        alert('Unable to reach banking server to release hold. Please check backend connection.');
       }
     }
   };
@@ -43,10 +102,28 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
             </div>
           </div>
           <span className={`px-2.5 py-1 text-xs font-semibold rounded-full flex items-center gap-1.5 ${
-            isLocked ? 'bg-red-500/20 text-red-400 border border-red-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+            !isInitialized
+              ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40'
+              : isLocked
+              ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+              : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
           }`}>
-            {isLocked ? <Lock className="w-3.5 h-3.5" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-            {isLocked ? 'PAYMENTS FROZEN' : 'ACTIVE & SECURE'}
+            {!isInitialized ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>SYNCING STATUS...</span>
+              </>
+            ) : isLocked ? (
+              <>
+                <Lock className="w-3.5 h-3.5" />
+                <span>PAYMENTS FROZEN</span>
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>ACTIVE & SECURE</span>
+              </>
+            )}
           </span>
         </div>
 
@@ -105,6 +182,13 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
             <div className="p-2 bg-emerald-500/15 border border-emerald-500/40 rounded-lg text-emerald-400 text-xs flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               <span>{transferMsg}</span>
+            </div>
+          )}
+
+          {transferError && (
+            <div className="p-2 bg-red-500/15 border border-red-500/40 rounded-lg text-red-400 text-xs flex items-center gap-1.5">
+              <AlertOctagon className="w-4 h-4 flex-shrink-0" />
+              <span>{transferError}</span>
             </div>
           )}
         </div>

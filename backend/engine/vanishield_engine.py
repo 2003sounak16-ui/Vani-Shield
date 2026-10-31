@@ -860,7 +860,27 @@ class VaniShieldCore:
 
 
 
-        is_blacklisted = clean_key in self.blacklist
+        try:
+            from backend.engine.caller_tracker import hash_caller_identity, hash_caller_identity_legacy
+        except ImportError:
+            try:
+                from caller_tracker import hash_caller_identity, hash_caller_identity_legacy
+            except ImportError:
+                from ephemeral_buffer import hash_caller_identity
+                hash_caller_identity_legacy = hash_caller_identity
+
+        caller_h = hash_caller_identity(clean_key)
+        caller_h_legacy = hash_caller_identity_legacy(clean_key)
+        is_blacklisted = (
+            caller_h in self.blacklist
+            or caller_h_legacy in self.blacklist
+            or clean_key in self.blacklist
+            or any(
+                entry.get("caller_hash") in (caller_h, caller_h_legacy)
+                for entry in self.blacklist.values()
+                if isinstance(entry, dict)
+            )
+        )
 
         is_voip_spoofed = (
 
@@ -1061,7 +1081,7 @@ class VaniShieldCore:
 
 
         # Include tail window aligned to len - window_size if audio extends beyond last hop
-        if len(audio_chunk_16k) > window_size:
+        if len(audio_chunk_16k) > window_size and (len(audio_chunk_16k) - window_size) % hop_size != 0:
             tail_clip = audio_chunk_16k[-window_size:]
             if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
                 clips.append(tail_clip)
@@ -1531,38 +1551,33 @@ class VaniShieldCore:
             threat_reason = f"{threat_type}: Voice clone / financial vishing threat detected"
 
             try:
+                from backend.engine.caller_tracker import hash_caller_identity, mask_phone
+            except ImportError:
+                try:
+                    from caller_tracker import hash_caller_identity, mask_phone
+                except ImportError:
+                    from ephemeral_buffer import hash_caller_identity
+                    def mask_phone(p):
+                        p_str = str(p).strip()
+                        return f"{p_str[:4]}****{p_str[-4:]}" if len(p_str) >= 8 else "ANONYMIZED_CALLER"
 
-                from ephemeral_buffer import hash_caller_identity
-
+            try:
                 caller_hash = hash_caller_identity(clean_key)
-
             except Exception:
-
                 caller_hash = "ANONYMIZED_CALLER"
 
-
-
             entry = {
-
                 "caller_hash": caller_hash,
-
+                "phone_masked": mask_phone(clean_key),
                 "location": telecom.get("location", "Unknown"),
-
                 "carrier": telecom.get("carrier", "Unknown"),
-
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-
                 "risk_score": final_risk,
-
                 "reason": threat_reason,
-
                 "action": "BANKING_AND_UPI_LOCKED"
-
             }
-
             with _blacklist_lock:
-
-                self.blacklist[clean_key] = entry
+                self.blacklist[caller_hash] = entry
 
                 try:
 

@@ -348,7 +348,7 @@ def _synth_events(analysis, fusion: dict, breaker_engaged: bool, lang: str = "en
     return events
 
 
-def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float) -> str:
+def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float, transcription_failed: bool = False) -> str:
     """
     Names the threat consistently with the fused score.
 
@@ -360,6 +360,9 @@ def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float) -> str:
     """
     if fusion.get("hard_rule") == "KNOWN_SCAMMER_NUMBER":
         return "BLACKLISTED_SCAMMER"
+
+    if transcription_failed:
+        return "UNVERIFIED_TRANSCRIPTION_FAILED"
 
     synthetic = acoustic_prob >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD
     demands_money = scam_stages.CREDENTIAL in (stages or [])
@@ -665,7 +668,7 @@ class VaniShieldCore:
         single place both substitutions live: the demo stub, and upstream's
         fallback for an install with no torch.
         """
-        if self.demo_scorer is not None:
+        if getattr(self, "demo_scorer", None) is not None:
             return self.demo_scorer.score_windows_percent(clips)
 
         if (
@@ -1100,7 +1103,27 @@ class VaniShieldCore:
 
 
 
-        is_blacklisted = clean_key in self.blacklist
+        try:
+            from backend.engine.caller_tracker import hash_caller_identity, hash_caller_identity_legacy
+        except ImportError:
+            try:
+                from caller_tracker import hash_caller_identity, hash_caller_identity_legacy
+            except ImportError:
+                from ephemeral_buffer import hash_caller_identity
+                hash_caller_identity_legacy = hash_caller_identity
+
+        caller_h = hash_caller_identity(clean_key)
+        caller_h_legacy = hash_caller_identity_legacy(clean_key)
+        is_blacklisted = (
+            caller_h in self.blacklist
+            or caller_h_legacy in self.blacklist
+            or clean_key in self.blacklist
+            or any(
+                entry.get("caller_hash") in (caller_h, caller_h_legacy)
+                for entry in self.blacklist.values()
+                if isinstance(entry, dict)
+            )
+        )
 
         is_voip_spoofed = (
 
@@ -1329,7 +1352,7 @@ class VaniShieldCore:
 
 
         # Include tail window aligned to len - window_size if audio extends beyond last hop
-        if len(audio_chunk_16k) > window_size:
+        if len(audio_chunk_16k) > window_size and (len(audio_chunk_16k) - window_size) % hop_size != 0:
             tail_clip = audio_chunk_16k[-window_size:]
             if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
                 clips.append(tail_clip)
@@ -1785,7 +1808,7 @@ class VaniShieldCore:
         )
         final_risk = fusion["risk_score"]
         legacy_threat_type = threat_type
-        threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob)
+        threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob, transcription_failed=transcription_failed)
 
 
 
@@ -1822,38 +1845,33 @@ class VaniShieldCore:
             threat_reason = f"{threat_type}: Voice clone / financial vishing threat detected"
 
             try:
+                from backend.engine.caller_tracker import hash_caller_identity, mask_phone
+            except ImportError:
+                try:
+                    from caller_tracker import hash_caller_identity, mask_phone
+                except ImportError:
+                    from ephemeral_buffer import hash_caller_identity
+                    def mask_phone(p):
+                        p_str = str(p).strip()
+                        return f"{p_str[:4]}****{p_str[-4:]}" if len(p_str) >= 8 else "ANONYMIZED_CALLER"
 
-                from ephemeral_buffer import hash_caller_identity
-
+            try:
                 caller_hash = hash_caller_identity(clean_key)
-
             except Exception:
-
                 caller_hash = "ANONYMIZED_CALLER"
 
-
-
             entry = {
-
                 "caller_hash": caller_hash,
-
+                "phone_masked": mask_phone(clean_key),
                 "location": telecom.get("location", "Unknown"),
-
                 "carrier": telecom.get("carrier", "Unknown"),
-
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-
                 "risk_score": final_risk,
-
                 "reason": threat_reason,
-
                 "action": "BANKING_AND_UPI_LOCKED"
-
             }
-
             with _blacklist_lock:
-
-                self.blacklist[clean_key] = entry
+                self.blacklist[caller_hash] = entry
                 self._persist_blacklist()
 
 

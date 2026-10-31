@@ -16,15 +16,22 @@ import threading
 import numpy as np
 
 # Load HMAC key from environment variable; fallback to configured salt if not set
-_secret_env = os.environ.get("VANISHIELD_HMAC_SECRET", "vanishield_dpdp_secret_salt_2026")
-HMAC_SECRET = _secret_env.encode("utf-8") if isinstance(_secret_env, str) else _secret_env
+try:
+    from backend.engine.caller_tracker import hash_caller_identity, get_caller_hash_secret
+except ImportError:
+    try:
+        from caller_tracker import hash_caller_identity, get_caller_hash_secret
+    except ImportError:
+        def get_caller_hash_secret() -> bytes:
+            secret = os.environ.get("VANISHIELD_HMAC_SECRET", os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt"))
+            return secret.encode("utf-8") if isinstance(secret, str) else secret
 
-def hash_caller_identity(phone_number: str) -> str:
-    """Produces an irreversible, anonymized audit hash for phone numbers."""
-    if not phone_number:
-        return "ANONYMOUS"
-    clean = "".join(filter(str.isalnum, phone_number))
-    return hmac.new(HMAC_SECRET, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+        def hash_caller_identity(phone_number: str) -> str:
+            if not phone_number:
+                return "ANONYMIZED_CALLER"
+            clean = "".join(filter(str.isdigit, str(phone_number).strip()))
+            secret = get_caller_hash_secret()
+            return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 class EphemeralRAMBuffer:
     """
