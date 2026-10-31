@@ -3,6 +3,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import requests
 
 url = 'http://127.0.0.1:8000/api/evaluate/upload'
+REQUEST_TIMEOUT = (5.0, 30.0)
 
 zf = zipfile.ZipFile(r'data_external\in_the_wild\release_in_the_wild.zip')
 with zf.open('release_in_the_wild/meta.csv') as f:
@@ -16,7 +17,11 @@ spoof_passed = 0
 for _, row in spoofs.iterrows():
     fname = 'release_in_the_wild/' + row['file']
     audio_bytes = zf.read(fname)
-    resp = requests.post(url, files={'file': (row['file'], audio_bytes, 'audio/wav')})
+    try:
+        resp = requests.post(url, files={'file': (row['file'], audio_bytes, 'audio/wav')}, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        print(f'Request error: {e}')
+        continue
     res = resp.json()
     w2v = res.get('w2v_fake_prob', 0)
     risk = res.get('unified_risk_score', 0)
@@ -31,7 +36,11 @@ real_passed = 0
 for _, row in reals.iterrows():
     fname = 'release_in_the_wild/' + row['file']
     audio_bytes = zf.read(fname)
-    resp = requests.post(url, files={'file': (row['file'], audio_bytes, 'audio/wav')})
+    try:
+        resp = requests.post(url, files={'file': (row['file'], audio_bytes, 'audio/wav')}, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        print(f'Request error: {e}')
+        continue
     res = resp.json()
     w2v = res.get('w2v_fake_prob', 0)
     risk = res.get('unified_risk_score', 0)

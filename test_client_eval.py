@@ -14,10 +14,10 @@ test_files = [
     ("Real Friend (REAL)", os.path.join(PROJECT_ROOT, "data_demo/unseen_test/unseen_real_friend.wav")),
     ("Scam HDFC (FAKE)", os.path.join(PROJECT_ROOT, "data_demo/unseen_test/unseen_scam_hdfc.wav")),
     ("Fake SBI OTP (FAKE)", os.path.join(PROJECT_ROOT, "data_demo/fake/scam_sbi_otp.wav")),
-    ("BN Safe (REAL)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_bn_safe.wav")),
-    ("BN Scam (FAKE)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_bn_scam.wav")),
-    ("EN Safe (REAL)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_en_safe.wav")),
-    ("EN Scam (FAKE)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_en_scam.wav")),
+    ("BN Safe (REAL)", os.path.join(PROJECT_ROOT, "demo_samples/real/call_bn_safe.wav")),
+    ("BN Scam (FAKE)", os.path.join(PROJECT_ROOT, "demo_samples/fake/call_bn_scam.wav")),
+    ("EN Safe (REAL)", os.path.join(PROJECT_ROOT, "demo_samples/real/call_en_safe.wav")),
+    ("EN Scam (FAKE)", os.path.join(PROJECT_ROOT, "demo_samples/fake/call_en_scam.wav")),
 ]
 
 print(f"{'Label':22} | {'W2V Fake':>9} | {'Jev Scam':>9} | {'Risk':>6} | {'Locked':>6} | {'Keywords':>15} | Transcript")

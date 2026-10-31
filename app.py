@@ -1,72 +1,139 @@
 """
+
 VaniShield AI — Production FastAPI Server & Real-Time Threat Intelligence Engine
+
 Integrates:
+
 1. Audio Ear: Wav2Vec 2.0 (FP16 CUDA) fine-tuned on 4,447 samples
+
 2. Decision Brain: Jev-Omni 12B GGUF + Calibrated FP32 Decision Head
+
 3. Fast ASR & Multilingual Trigger Spotter: Faster-Whisper (INT8)
+
 4. Prosodic DSP & Biometrics: Librosa & SpeechBrain ECAPA-TDNN + FAISS
+
 5. Telecom Intelligence: Google Phonenumbers + Scammer Blacklist
+
 6. Privacy Layer: In-Process Ephemeral Volatile RAM Ring Buffer (DPDP Act 2023 Compliant)
+
 7. Frontend: 3-Panel Split Screen UI with Automated Banking Circuit Breaker
+
 """
 
+
+
 import os
+
 import sys
+
 if hasattr(sys.stdout, "reconfigure"):
+
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import io
 import re
+
 import time
+
 import json
+
 import glob
+
 import uuid
+
 import asyncio
+
 import logging
 import functools
+
+# Required by the TTS rate limiter below (_tts_lock). Its absence made
+# app.py raise NameError at import time, so the server could not start.
+import threading
+
 from concurrent.futures import ThreadPoolExecutor
+
 from typing import Optional, Dict, Any, List
 
+
+
 try:
+
     import dotenv
+
     dotenv.load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 except Exception:
+
     pass
+
+
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 try:
+
     from huggingface_hub.utils import logging as hf_hub_logging
+
     hf_hub_logging.set_verbosity_error()
+
 except Exception:
+
     pass
 
+
+
 import numpy as np
+
 import soundfile as sf
+
 import torch
+
 import torchaudio
+
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form
+
 from fastapi.middleware.cors import CORSMiddleware
+
 from fastapi.staticfiles import StaticFiles
+
 from fastapi.responses import HTMLResponse, JSONResponse
+
 from pydantic import BaseModel
 
+
+
 from vanishield_engine import core_engine, JEV_SERVER_URL, PROJECT_ROOT, threat_type_from_fusion
+
 from ephemeral_buffer import ram_ring_buffer, hash_caller_identity
 
 import scam_stages
 from scam_stages import fuse_risk
 from call_session import registry as session_registry
 
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 logger = logging.getLogger("VaniShieldAPI")
 
+
+
 # Bounded Worker Executor and Admission Control for CPU/GPU heavy analysis tasks (Issue #6, #37)
+
 MAX_CONCURRENT_WORKERS = min(4, os.cpu_count() or 2)
+
 ANALYSIS_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS)
+
 UPLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_WORKERS)
 
+
+
 # Guard limits against memory exhaustion (Issue #5)
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024               # 25 MB max upload
+
 MAX_AUDIO_SECONDS = 180                           # 3 minutes max duration
+
 MAX_DECODED_SAMPLES = MAX_AUDIO_SECONDS * 16000  # 2,880,000 samples @ 16kHz
 
 # Minimum wall time between two inference passes on one live session. Clients
@@ -75,46 +142,89 @@ MAX_DECODED_SAMPLES = MAX_AUDIO_SECONDS * 16000  # 2,880,000 samples @ 16kHz
 # latency becomes a measure of the backlog rather than of the pipeline.
 MIN_EVAL_INTERVAL_SECONDS = 0.5
 
+
+
 app = FastAPI(
+
     title="VaniShield AI — Real-Time Voice Cloning Defense & Banking Circuit Breaker",
+
     description="Full-stack AI Audio Forensics, Jev-Omni Brain, and UPI Lockdown Server",
+
     version="2.0.0"
+
 )
+
+
 
 # Startup validation: Fail startup clearly if trained weights are missing (Issue #1)
+
 @app.on_event("startup")
+
 async def startup_check():
+
     if core_engine is None:
+
         logger.critical("FATAL: VaniShield Core failed to initialize because no trained Wav2Vec 2.0 checkpoint was found.")
+
         raise RuntimeError(
+
             "VaniShield AI server cannot start without trained checkpoint weights. "
+
             "Please provide a fine-tuned model checkpoint directory containing config.json."
+
         )
 
+
+
 # Explicit allowed origins to secure endpoints and prevent CWE-942
+
 allowed_origins_env = os.environ.get("VANISHIELD_ALLOWED_ORIGINS")
+
 if allowed_origins_env:
+
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+
 else:
+
     allowed_origins = [
+
         "http://localhost:8000",
+
         "http://127.0.0.1:8000",
+
         "http://localhost:3000",
+
         "http://127.0.0.1:3000"
+
     ]
 
+
+
 app.add_middleware(
+
     CORSMiddleware,
+
     allow_origins=allowed_origins,
+
     allow_credentials=True,
+
     allow_methods=["GET", "POST", "OPTIONS"],
+
     allow_headers=["*"],
+
 )
 
+
+
 # Mount Static Files for 3-Panel Split-Screen Frontend
+
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
+
 os.makedirs(STATIC_DIR, exist_ok=True)
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 
 def _serve_static_page(filename: str, missing_hint: str) -> str:
     path = os.path.join(STATIC_DIR, filename)
@@ -140,42 +250,81 @@ async def serve_call_screen():
     """The on-call alert screen a person actually sees when the phone rings."""
     return _serve_static_page("call-screen.html", "static/call-screen.html is missing.")
 
+
+
 # -------------------------------------------------------------
+
 # PRESET SIMULATOR (English, Bengali, Hindi Attack & Safe Calls)
+
 # Resolves paths relative to PROJECT_ROOT using shipped fixtures (Issue #7)
+
 # -------------------------------------------------------------
+
 PRESET_CALLS = {
+
     "en_safe": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_en_safe.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "real", "call_en_safe.wav"),
+
         "phone": "+91-9830112233 (Bengaluru, Karnataka - Airtel)",
+
         "transcript": "Hi team, let's reschedule our design review meeting to Thursday afternoon at 3 PM. Let me know if that works."
+
     },
+
     "en_scam": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_en_scam.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_en_scam.wav"),
+
         "phone": "+91-1409988776 (VoIP Spoofed - International Gateway)",
+
         "transcript": "Urgent security notice from State Bank of India fraud team. Your account has an illegal debit of 65,000 rupees. Share your 6-digit OTP and CVV right now to reverse it."
+
     },
+
     "bn_safe": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_bn_safe.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "real", "call_bn_safe.wav"),
+
         "phone": "+91-9433098765 (Kolkata, West Bengal - BSNL)",
+
         "transcript": "নমস্কার কাকিমা, আমি শুভঙ্কর বলছি। কাল বিকেলে আপনাদের বাড়ি আসব, কেমন আছেন সবাই?"
+
     },
+
     "bn_scam": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_bn_scam.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_bn_scam.wav"),
+
         "phone": "+91-1401122334 (Spoofed Virtual PBX)",
+
         "transcript": "জরুরি ব্যাংক সতর্কতা: আপনার স্টেট ব্যাংক একাউন্ট স্থগিত করা হয়েছে। অবিলম্বে ৬ সংখ্যার ওটিপি ও ইউপিআই পিন প্রদান করুন অন্যথায় অ্যাকাউন্ট স্থায়ীভাবে বন্ধ হবে।"
+
     },
+
     "hi_safe": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_hi_safe.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "real", "call_hi_safe.wav"),
+
         "phone": "+91-9811234567 (New Delhi - Jio)",
+
         "transcript": "नमस्ते भाई, कल कॉलेज की क्लास सुबह नौ बजे शुरू होगी। असाइनमेंट पूरा हो गया क्या?"
+
     },
+
     "hi_scam": {
-        "audio_file": os.path.join(PROJECT_ROOT, "test_multilingual_calls", "call_hi_scam.wav"),
+
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_hi_scam.wav"),
+
         "phone": "+91-1407766554 (Unregistered VoIP Line)",
+
         "transcript": "नमस्कार, एचडीएफसी बैंक हेड ऑफिस। आपके पैन कार्ड में विसंगति पाई गई है। तुरंत अपना एटीएम पिन, सीवीवी और ओटीपी शेयर करके पैन री-वेरीफाई करें।"
+
     }
+
 }
+
+
 
 def load_wav_16k_mono(path: str) -> np.ndarray:
     """
@@ -184,14 +333,28 @@ def load_wav_16k_mono(path: str) -> np.ndarray:
     Uses soundfile rather than torchaudio.load: recent torchaudio delegates
     decoding to TorchCodec and raises without it, which broke every preset on
     an otherwise working install. soundfile reads WAV directly and is already
-    a declared dependency, so this drops a heavy optional backend from the
-    path entirely. torchaudio stays as a fallback for containers soundfile
-    cannot open.
+    a declared dependency. torchaudio stays as a fallback for containers
+    soundfile cannot open.
+
+    Also resolves fixtures that moved into demo_samples/{real,fake}/, so a
+    preset entry written against either layout keeps working.
     """
     if not os.path.isabs(path):
         path = os.path.join(PROJECT_ROOT, path)
+
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Preset audio file fixture not found: {path}")
+        fname = os.path.basename(path)
+        for sub in ("real", "fake", ""):
+            cand = (
+                os.path.join(PROJECT_ROOT, "demo_samples", sub, fname)
+                if sub
+                else os.path.join(PROJECT_ROOT, "demo_samples", fname)
+            )
+            if os.path.exists(cand):
+                path = cand
+                break
+        else:
+            raise FileNotFoundError(f"Preset audio file fixture not found: {path}")
 
     try:
         data, sr = sf.read(path, dtype="float32", always_2d=True)
@@ -217,145 +380,298 @@ def _sync_simulate_preset(preset: dict) -> dict:
     audio_np = load_wav_16k_mono(preset["audio_file"])
 
     return core_engine.evaluate_live_call(
+
         audio_chunk_16k=audio_np,
+
         phone_number=preset["phone"],
+
         known_transcript=preset["transcript"],
+
         is_upload=True
+
     )
+
+
 
 @app.get("/api/simulate/{preset_id}")
+
 async def simulate_preset(preset_id: str):
+
     if core_engine is None:
+
         raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
+
     preset = PRESET_CALLS.get(preset_id)
+
     if not preset:
+
         raise HTTPException(status_code=404, detail="Unknown preset ID")
 
+
+
     try:
+
         loop = asyncio.get_running_loop()
+
         result = await loop.run_in_executor(ANALYSIS_EXECUTOR, _sync_simulate_preset, preset)
+
         return result
+
     except FileNotFoundError as fnf:
+
         raise HTTPException(status_code=404, detail=str(fnf))
+
     except Exception as e:
+
         logger.error(f"Error during preset simulation '{preset_id}': {e}")
+
         raise HTTPException(status_code=500, detail=f"Simulation error: {e}")
 
+
+
 def decode_audio_bytes(content: bytes, max_samples: int = MAX_DECODED_SAMPLES) -> np.ndarray:
+
     """Decodes audio container in volatile RAM, guarded against memory exhaustion (Issue #5)."""
+
     try:
+
         import av
+
         container = av.open(io.BytesIO(content))
+
         resampler = av.AudioResampler(format="fltp", layout="mono", rate=16000)
+
         frames = []
+
         accumulated_samples = 0
+
         for frame in container.decode(audio=0):
+
             for rf in resampler.resample(frame):
+
                 arr_slice = rf.to_ndarray()
-                frames.append(arr_slice)
-                accumulated_samples += arr_slice.shape[-1]
-                if accumulated_samples >= max_samples:
+
+                needed = max_samples - accumulated_samples
+
+                if needed <= 0:
+
                     break
+
+                if arr_slice.shape[-1] > needed:
+
+                    arr_slice = arr_slice[..., :needed]
+
+                frames.append(arr_slice)
+
+                accumulated_samples += arr_slice.shape[-1]
+
+                if accumulated_samples >= max_samples:
+
+                    break
+
             if accumulated_samples >= max_samples:
+
                 break
+
         if frames:
+
             arr = np.concatenate(frames, axis=1).squeeze()
+
             if arr.ndim > 1:
+
                 arr = arr.mean(axis=0)
+
             if len(arr) > max_samples:
+
                 arr = arr[:max_samples]
+
             arr = np.clip(arr, -1.0, 1.0)
+
             return arr.astype(np.float32)
+
     except Exception as e:
+
         logger.warning(f"PyAV decode fallback triggered: {e}")
 
+
+
     try:
-        data, sr = sf.read(io.BytesIO(content))
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        if sr != 16000:
-            import librosa
-            data = librosa.resample(data, orig_sr=sr, target_sr=16000)
-        if len(data) > max_samples:
-            data = data[:max_samples]
-        return data.astype(np.float32)
+
+        with sf.SoundFile(io.BytesIO(content)) as sfile:
+
+            orig_sr = sfile.samplerate
+
+            max_frames_to_read = int(max_samples * (orig_sr / 16000.0)) + 1000 if orig_sr else max_samples
+
+            data = sfile.read(frames=max_frames_to_read, dtype="float32")
+
+            if data.ndim > 1:
+
+                data = data.mean(axis=1)
+
+            if orig_sr != 16000:
+
+                import librosa
+
+                data = librosa.resample(data, orig_sr=orig_sr, target_sr=16000)
+
+            if len(data) > max_samples:
+
+                data = data[:max_samples]
+
+            return data.astype(np.float32)
+
     except Exception as e:
+
         logger.error(f"Audio decode failed: {e}")
+
         raise HTTPException(status_code=400, detail=f"Unsupported or unreadable audio format: {e}")
 
+
+
 def _sync_evaluate_audio(content: bytes, phone_number: str, transcript: Optional[str]) -> dict:
+
     audio_np = decode_audio_bytes(content)
+
     clean_caller = phone_number.strip() if phone_number else "Direct Audio File Upload"
+
     result = core_engine.evaluate_live_call(
+
         audio_chunk_16k=audio_np,
+
         phone_number=clean_caller,
+
         known_transcript=transcript,
+
         is_upload=True
+
     )
+
     result["duration_seconds"] = round(len(audio_np) / 16000.0, 2)
+
     return result
 
+
+
 # -------------------------------------------------------------
+
 # REST ENDPOINT: AUDIO FILE EVALUATION & DROP UPLOAD
+
 # -------------------------------------------------------------
+
 @app.post("/api/evaluate/audio")
+
 @app.post("/api/evaluate/upload")
+
 async def evaluate_audio_file(
+
     file: UploadFile = File(...),
+
     phone_number: Optional[str] = Form("+91-0000000000 (Direct Audio Upload)"),
+
     transcript: Optional[str] = Form(None)
+
 ):
+
     """Processes dropped/uploaded audio file in volatile RAM with byte/duration limits offloaded to worker pool."""
+
     if core_engine is None:
+
         raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
+
+
 
     logger.info(f"Received audio file upload: {file.filename} (content_type: {file.content_type})")
 
+
+
     # Admission control: Prevent memory exhaustion under concurrent upload floods (Issue #37)
+
     try:
+
         await asyncio.wait_for(UPLOAD_SEMAPHORE.acquire(), timeout=0.1)
+
     except asyncio.TimeoutError:
+
         raise HTTPException(
+
             status_code=503,
+
             detail="Server is currently at maximum upload evaluation capacity. Please retry shortly."
+
         )
 
+
+
     try:
+
         # Read uploaded bytes with bounded memory guard (Issue #5)
+
         total_bytes = 0
+
         chunks = []
+
         chunk_size = 64 * 1024
+
         while True:
+
             chunk = await file.read(chunk_size)
+
             if not chunk:
+
                 break
+
             total_bytes += len(chunk)
+
             if total_bytes > MAX_UPLOAD_BYTES:
+
                 raise HTTPException(
+
                     status_code=413,
+
                     detail=f"Uploaded file exceeds maximum limit of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
+
                 )
+
             chunks.append(chunk)
 
+
+
         if total_bytes == 0:
+
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+
 
         content = b"".join(chunks)
 
-        # Offload heavy decoding & inference to bounded executor (Issue #6)
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            ANALYSIS_EXECUTOR,
-            _sync_evaluate_audio,
-            content,
-            phone_number,
-            transcript
-        )
-        result["filename"] = file.filename
-        return result
-    finally:
-        UPLOAD_SEMAPHORE.release()
 
+
+        # Offload heavy decoding & inference to bounded executor (Issue #6)
+
+        loop = asyncio.get_running_loop()
+
+        result = await loop.run_in_executor(
+
+            ANALYSIS_EXECUTOR,
+
+            _sync_evaluate_audio,
+
+            content,
+
+            phone_number,
+
+            transcript
+
+        )
+
+        result["filename"] = file.filename
+
+        return result
+
+    finally:
+
+        UPLOAD_SEMAPHORE.release()
 # -------------------------------------------------------------
 # STAGE METADATA — lets a client render chips and thresholds before
 # the first call arrives, in the language it asks for.
@@ -616,28 +932,56 @@ async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
             pass
 
 
+
+
+
+
+
 # -------------------------------------------------------------
+
 # WEBSOCKET: REAL-TIME STREAMING & EPHEMERAL RAM BUFFER
+
 # -------------------------------------------------------------
+
 @app.websocket("/ws/live-call")
+
 async def live_call_websocket(websocket: WebSocket):
+
     """
+
     Bi-directional streaming WebSocket.
+
     Audio flows through the in-memory DPDP Ephemeral RAM Buffer.
+
     Emits real-time scam scores and triggers the Banking Circuit Breaker.
+
     """
+
     await websocket.accept()
+
     # Unique session key per connection (Issue #11)
+
     session_id = f"call_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+
     logger.info(f"WebSocket client connected. Session ID: {session_id}")
 
+
+
     # Isolated caller identity per connection (Issue #3)
+
     # Default to an inbound caller identity specific to this session, allowing client overrides
+
     caller_phone = (
+
         websocket.query_params.get("phone")
+
         or websocket.query_params.get("caller_id")
+
         or f"+91-0000000000 (Live Call {session_id[-6:]})"
+
     )
+
+
 
     loop = asyncio.get_running_loop()
     # Reap abandoned sessions here rather than on a timer: a half-open socket
@@ -759,9 +1103,14 @@ async def live_call_websocket(websocket: WebSocket):
     finally:
         session_registry.drop(session_id)
 
+
+
 # -------------------------------------------------------------
+
 # HEALTH & BLACKLIST ENDPOINTS
+
 # -------------------------------------------------------------
+
 @app.get("/health")
 async def health_check():
     demo_scorer = getattr(core_engine, "demo_scorer", None) if core_engine else None
@@ -793,10 +1142,16 @@ async def health_check():
         "active_calls": session_registry.active_count(),
     }
 
+
+
 @app.get("/api/blacklist")
+
 async def get_blacklist():
+
     if core_engine is not None:
+
         return core_engine.blacklist
+
     return {}
 
 
@@ -831,13 +1186,226 @@ async def remove_from_blacklist(phone_number: str):
     removed = core_engine.unblock_caller(phone_number)
     if not removed:
         raise HTTPException(status_code=404, detail=f"'{phone_number}' is not on the blacklist.")
-    return {"status": "unblocked", "caller": core_engine.normalize_caller_key(phone_number)}
+
+
+
+# -------------------------------------------------------------
+
+# SARVAM AI STT & ELEVENLABS TTS INTEGRATION ENDPOINTS
+
+# -------------------------------------------------------------
+
+class SynthesizeRequest(BaseModel):
+
+    text: str
+
+    voice_id: Optional[str] = None
+
+    model_id: Optional[str] = "eleven_multilingual_v2"
+
+    phone_number: Optional[str] = "+91-1409988776 (ElevenLabs Cloned Call)"
+
+    use_known_transcript: Optional[bool] = False
+
+
+
+@app.get("/api/stt/status")
+
+async def get_stt_status():
+
+    from sarvam_stt import is_sarvam_available
+
+    sarvam_on = is_sarvam_available()
+
+    return {
+
+        "engine": getattr(core_engine, "asr_name", "Faster-Whisper") if core_engine else "Unavailable",
+
+        "sarvam_ai_active": sarvam_on,
+
+        "provider": "Sarvam AI Saaras" if sarvam_on else "Faster-Whisper (Local)"
+
+    }
+
+
+
+MAX_TTS_TEXT_LENGTH = 500
+_tts_lock = threading.Lock()
+_tts_timestamps = []
+MAX_TTS_PER_MINUTE = 10
+
+def _check_tts_budget_and_length(text: str):
+    stripped = text.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    if len(stripped) > MAX_TTS_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum permitted length ({MAX_TTS_TEXT_LENGTH} characters)."
+        )
+    now = time.time()
+    with _tts_lock:
+        _tts_timestamps[:] = [t for t in _tts_timestamps if now - t < 60.0]
+        if len(_tts_timestamps) >= MAX_TTS_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail="TTS generation rate limit / budget quota reached. Please try again in 1 minute."
+            )
+        _tts_timestamps.append(now)
+
+
+@app.get("/api/tts/voices")
+
+async def get_tts_voices():
+
+    from elevenlabs_tts import is_elevenlabs_available, fetch_account_voices, get_curated_voices
+
+    has_key = is_elevenlabs_available()
+
+    loop = asyncio.get_running_loop()
+    voices = await loop.run_in_executor(ANALYSIS_EXECUTOR, fetch_account_voices) if has_key else get_curated_voices()
+
+    return {
+
+        "elevenlabs_active": has_key,
+
+        "provider": "ElevenLabs Neural TTS" if has_key else "Edge-TTS (Fallback)",
+
+        "voices": voices
+
+    }
+
+
+
+@app.post("/api/tts/synthesize")
+
+async def tts_synthesize(req: SynthesizeRequest):
+
+    """Generates audio for given text via ElevenLabs API (or fallback) and streams audio/mpeg."""
+
+    from elevenlabs_tts import synthesize_with_fallback
+
+    from fastapi.responses import Response
+
+
+
+    if not req.text.strip():
+
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+
+
+
+    _check_tts_budget_and_length(req.text)
+    loop = asyncio.get_running_loop()
+    audio_bytes, meta, err = await loop.run_in_executor(
+        ANALYSIS_EXECUTOR,
+        synthesize_with_fallback,
+        req.text,
+        req.voice_id or "21m00Tcm4TlvDq8ikWAM"
+    )
+
+    if err and not audio_bytes:
+
+        raise HTTPException(status_code=500, detail=f"TTS Synthesis error: {err}")
+
+
+
+    return Response(content=audio_bytes, media_type="audio/mpeg", headers={
+
+        "X-TTS-Engine": meta.get("engine", "TTS"),
+
+        "X-Voice-ID": meta.get("voice_id", "default")
+
+    })
+
+
+
+@app.post("/api/tts/simulate-attack")
+
+async def tts_simulate_attack(req: SynthesizeRequest):
+
+    """
+
+    End-to-End Test: Synthesizes text via ElevenLabs TTS and immediately runs
+
+    it through the full VaniShield 8-pillar forensic pipeline (including Sarvam STT & Wav2Vec 2.0).
+
+    """
+
+    import base64
+
+    from elevenlabs_tts import synthesize_with_fallback
+
+
+
+    if not req.text.strip():
+
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+
+
+
+    _check_tts_budget_and_length(req.text)
+    loop = asyncio.get_running_loop()
+    audio_bytes, meta, err = await loop.run_in_executor(
+        ANALYSIS_EXECUTOR,
+        synthesize_with_fallback,
+        req.text,
+        req.voice_id or "21m00Tcm4TlvDq8ikWAM"
+    )
+
+    if err and not audio_bytes:
+
+        raise HTTPException(status_code=500, detail=f"TTS Synthesis error: {err}")
+
+
+
+    loop = asyncio.get_running_loop()
+
+    # If req.use_known_transcript is False, Sarvam AI STT will actively transcribe the audio live!
+
+    transcript_arg = req.text if req.use_known_transcript else None
+
+    analysis = await loop.run_in_executor(
+
+        ANALYSIS_EXECUTOR,
+
+        _sync_evaluate_audio,
+
+        audio_bytes,
+
+        req.phone_number or "+91-1409988776 (ElevenLabs Cloned Call)",
+
+        transcript_arg
+
+    )
+
+
+
+    return {
+
+        "analysis": analysis,
+
+        "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
+
+        "tts_metadata": meta
+
+    }
+
+
 
 if __name__ == "__main__":
+
     import uvicorn
+
     print("\n" + "=" * 70)
+
     print("VaniShield AI: Starting Unified FastAPI Backend & Web Dashboard")
+
     print("Dashboard URL: http://127.0.0.1:8000")
+
     print("WebSocket URL: ws://127.0.0.1:8000/ws/live-call")
+
     print("=" * 70 + "\n")
+
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+
