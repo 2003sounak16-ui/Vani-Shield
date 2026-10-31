@@ -708,10 +708,17 @@ class SessionRegistry:
         reaped = 0
         for key in stale:
             with self._lock:
-                session = self._sessions.pop(key, None)
-            if session is not None:
-                session.end(reason="IDLE_TIMEOUT")
-                reaped += 1
+                session = self._sessions.get(key)
+                # Recheck idleness under the same lock that removes it. The
+                # scan above ran without the lock held, so a frame can arrive
+                # in between - and ending the session on a stale snapshot
+                # would discard the accumulated stages of a call that is
+                # still in progress, with every later frame ignored.
+                if session is None or session.idle_sec < cutoff:
+                    continue
+                self._sessions.pop(key, None)
+            session.end(reason="IDLE_TIMEOUT")
+            reaped += 1
         if reaped:
             logger.info("Reaped %d idle call session(s).", reaped)
         return reaped

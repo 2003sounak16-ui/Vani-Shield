@@ -846,6 +846,8 @@ async def get_stage_metadata(lang: str = "en"):
 # end up in access logs or browser history.
 # -------------------------------------------------------------
 OBSERVER_AUTH_TIMEOUT_SECONDS = 5.0
+# How long one observer may take to accept a frame before it is dropped.
+OBSERVER_SEND_TIMEOUT_SECONDS = 1.0
 
 # Session id prefixes. Only live calls are observable; a replay is a fixture
 # being scored, not a person on a phone.
@@ -886,11 +888,37 @@ async def _publish_to_observers(session_id: str, frame: dict) -> None:
 
     payload = dict(frame)
     payload["observed"] = True
-    for watcher in watchers:
+
+    async def _send(watcher):
         try:
-            await watcher.send_json(payload)
+            # Bounded and concurrent. Awaiting each observer in turn meant a
+            # single slow dashboard socket delayed the next frame to the
+            # person actually on the call - the one frame that matters.
+            await asyncio.wait_for(watcher.send_json(payload), OBSERVER_SEND_TIMEOUT_SECONDS)
         except Exception:
             await _unregister_observer(session_id, watcher)
+
+    await asyncio.gather(*(_send(w) for w in watchers), return_exceptions=True)
+
+
+async def _close_observers(session_id: str, final_frame: dict) -> None:
+    """Tells observers the call is over, then lets their sockets go.
+
+    Without this an observer sits in receive_text() forever showing the last
+    frame of a call that ended minutes ago, and its subscription survives
+    until the process restarts.
+    """
+    async with _observers_lock:
+        watchers = list(_observers.pop(session_id, ()))
+    for watcher in watchers:
+        try:
+            await asyncio.wait_for(watcher.send_json(final_frame), OBSERVER_SEND_TIMEOUT_SECONDS)
+        except Exception:
+            pass
+        try:
+            await watcher.close(code=1000)
+        except Exception:
+            pass
 
 
 
@@ -1113,6 +1141,14 @@ async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
         except Exception:
             pass
     finally:
+        # Every way this call can end converges here, so observers are
+        # told and released in one place rather than on each branch.
+        await _close_observers(session_id, {
+            "status": "ended",
+            "session_id": session_id,
+            "call_state": "ENDED",
+            "observed": True,
+        })
         session_registry.drop(session_id)
         try:
             await websocket.close()
@@ -1183,8 +1219,15 @@ async def observe_session_websocket(websocket: WebSocket, session_id: str):
     # whether a session by this id exists.
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=OBSERVER_AUTH_TIMEOUT_SECONDS)
-        pin = (json.loads(raw) or {}).get("pin")
-    except (asyncio.TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+        decoded = json.loads(raw)
+        # Valid JSON is not necessarily an object: a bare scalar or array
+        # would make .get() raise AttributeError, which the handler below
+        # does not catch, so a malformed first message became a server error
+        # instead of a clean 4401.
+        if not isinstance(decoded, dict):
+            raise ValueError("auth message must be a JSON object")
+        pin = decoded.get("pin")
+    except (asyncio.TimeoutError, ValueError, TypeError, AttributeError, WebSocketDisconnect):
         await websocket.close(code=4401)
         return
 
@@ -1445,6 +1488,14 @@ async def live_call_websocket(websocket: WebSocket):
         ram_ring_buffer.purge_session(session_id)
         logger.error(f"WebSocket error: {e}")
     finally:
+        # Every way this call can end converges here, so observers are
+        # told and released in one place rather than on each branch.
+        await _close_observers(session_id, {
+            "status": "ended",
+            "session_id": session_id,
+            "call_state": "ENDED",
+            "observed": True,
+        })
         session_registry.drop(session_id)
 
 
