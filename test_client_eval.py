@@ -1,3 +1,4 @@
+import os
 import sys
 import requests
 import json
@@ -5,28 +6,44 @@ import json
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+url = os.environ.get("VANISHIELD_EVAL_URL", "http://127.0.0.1:8000/api/evaluate/upload")
+REQUEST_TIMEOUT = (5.0, 30.0)
+
 test_files = [
-    ("Real Friend (REAL)", "data_demo/unseen_test/unseen_real_friend.wav"),
-    ("Scam HDFC (FAKE)", "data_demo/unseen_test/unseen_scam_hdfc.wav"),
-    ("Fake SBI OTP (FAKE)", "data_demo/fake/scam_sbi_otp.wav"),
-    ("BN Safe (REAL)", "test_multilingual_calls/call_bn_safe.wav"),
-    ("BN Scam (FAKE)", "test_multilingual_calls/call_bn_scam.wav"),
-    ("EN Safe (REAL)", "test_multilingual_calls/call_en_safe.wav"),
-    ("EN Scam (FAKE)", "test_multilingual_calls/call_en_scam.wav"),
-    ("User Voice (REAL)", r"C:\Users\souna\.gemini\antigravity\brain\66a12257-e1a0-45be-b045-dd87c5fd01de\.user_uploaded\uploaded_media_1793365290300.m4a"),
+    ("Real Friend (REAL)", os.path.join(PROJECT_ROOT, "data_demo/unseen_test/unseen_real_friend.wav")),
+    ("Scam HDFC (FAKE)", os.path.join(PROJECT_ROOT, "data_demo/unseen_test/unseen_scam_hdfc.wav")),
+    ("Fake SBI OTP (FAKE)", os.path.join(PROJECT_ROOT, "data_demo/fake/scam_sbi_otp.wav")),
+    ("BN Safe (REAL)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_bn_safe.wav")),
+    ("BN Scam (FAKE)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_bn_scam.wav")),
+    ("EN Safe (REAL)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_en_safe.wav")),
+    ("EN Scam (FAKE)", os.path.join(PROJECT_ROOT, "test_multilingual_calls/call_en_scam.wav")),
 ]
 
 print(f"{'Label':22} | {'W2V Fake':>9} | {'Jev Scam':>9} | {'Risk':>6} | {'Locked':>6} | {'Keywords':>15} | Transcript")
 print("-" * 105)
 
 for label, p in test_files:
-    with open(p, "rb") as f:
-        resp = requests.post(
-            "http://127.0.0.1:8000/api/evaluate/upload",
-            files={"file": f},
-            data={"phone_number": "+91-9988776655"}
-        )
-    res = resp.json()
+    if not os.path.exists(p):
+        print(f"{label:22} | (Skipped - file not found: {os.path.basename(p)})")
+        continue
+
+    try:
+        with open(p, "rb") as f:
+            resp = requests.post(
+                url,
+                files={"file": f},
+                data={"phone_number": "+91-9988776655"},
+                timeout=REQUEST_TIMEOUT
+            )
+        if resp.status_code != 200:
+            print(f"{label:22} | HTTP {resp.status_code}: {resp.text[:50]}")
+            continue
+        res = resp.json()
+    except requests.exceptions.RequestException as e:
+        print(f"{label:22} | Request error/timeout: {e}")
+        continue
+
     w2v = res.get("w2v_fake_prob", 0)
     jev = res.get("jev_scam_prob", 0)
     risk = res.get("unified_risk_score", 0)

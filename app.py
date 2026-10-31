@@ -53,8 +53,10 @@ from ephemeral_buffer import ram_ring_buffer, hash_caller_identity
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("VaniShieldAPI")
 
-# Bounded Worker Executor for CPU/GPU heavy analysis tasks (Issue #6)
-ANALYSIS_EXECUTOR = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2))
+# Bounded Worker Executor and Admission Control for CPU/GPU heavy analysis tasks (Issue #6, #37)
+MAX_CONCURRENT_WORKERS = min(4, os.cpu_count() or 2)
+ANALYSIS_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS)
+UPLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_WORKERS)
 
 # Guard limits against memory exhaustion (Issue #5)
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024               # 25 MB max upload
@@ -259,38 +261,50 @@ async def evaluate_audio_file(
 
     logger.info(f"Received audio file upload: {file.filename} (content_type: {file.content_type})")
 
-    # Read uploaded bytes with bounded memory guard (Issue #5)
-    total_bytes = 0
-    chunks = []
-    chunk_size = 64 * 1024
-    while True:
-        chunk = await file.read(chunk_size)
-        if not chunk:
-            break
-        total_bytes += len(chunk)
-        if total_bytes > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Uploaded file exceeds maximum limit of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
-            )
-        chunks.append(chunk)
+    # Admission control: Prevent memory exhaustion under concurrent upload floods (Issue #37)
+    try:
+        await asyncio.wait_for(UPLOAD_SEMAPHORE.acquire(), timeout=0.1)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is currently at maximum upload evaluation capacity. Please retry shortly."
+        )
 
-    if total_bytes == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    try:
+        # Read uploaded bytes with bounded memory guard (Issue #5)
+        total_bytes = 0
+        chunks = []
+        chunk_size = 64 * 1024
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Uploaded file exceeds maximum limit of {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."
+                )
+            chunks.append(chunk)
 
-    content = b"".join(chunks)
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # Offload heavy decoding & inference to bounded executor (Issue #6)
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        ANALYSIS_EXECUTOR,
-        _sync_evaluate_audio,
-        content,
-        phone_number,
-        transcript
-    )
-    result["filename"] = file.filename
-    return result
+        content = b"".join(chunks)
+
+        # Offload heavy decoding & inference to bounded executor (Issue #6)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            ANALYSIS_EXECUTOR,
+            _sync_evaluate_audio,
+            content,
+            phone_number,
+            transcript
+        )
+        result["filename"] = file.filename
+        return result
+    finally:
+        UPLOAD_SEMAPHORE.release()
 
 # -------------------------------------------------------------
 # WEBSOCKET: REAL-TIME STREAMING & EPHEMERAL RAM BUFFER

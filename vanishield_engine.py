@@ -71,6 +71,7 @@ else:
     W2V_CHECKPOINT = None
 
 UNIFIED_MODEL_PT = os.environ.get("VANISHIELD_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_wav2vec_model.pt"))
+HEAD_NPZ = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz"))
 BLACKLIST_FILE = os.environ.get("VANISHIELD_BLACKLIST_PATH", os.path.join(PROJECT_ROOT, "scammer_blacklist.json"))
 JEV_SERVER_URL = os.environ.get("VANISHIELD_JEV_URL", "http://127.0.0.1:9931")
 
@@ -153,11 +154,27 @@ class VaniShieldCore:
 
         # 2. Unified Multimodal Network (Wav2Vec 2.0 + Jev-Omni Fusion Head)
         self.model = UnifiedMultilingualVoiceNet(w2v_model_path=active_checkpoint).to(self.device)
+        self.jev_head_trained = False
         if active_checkpoint == FALLBACK_MULTI_DIR and os.path.exists(UNIFIED_MODEL_PT):
             self.model.load_state_dict(torch.load(UNIFIED_MODEL_PT, map_location=self.device))
+            self.jev_head_trained = True
             print(f"  [1/5 Audio Ear & Brain] Loaded legacy unified weights from: {UNIFIED_MODEL_PT}")
         else:
             print(f"  [1/5 Audio Ear & Brain] Active Master SOTA Checkpoint: {active_checkpoint}")
+
+        # Load trained Jev decision head weights if available
+        if not self.jev_head_trained and os.path.exists(HEAD_NPZ):
+            try:
+                head_data = np.load(HEAD_NPZ)
+                if "W" in head_data and "b" in head_data:
+                    self.model.jev_head.weight.data = torch.from_numpy(head_data["W"]).to(self.device)
+                    self.model.jev_head.bias.data = torch.from_numpy(head_data["b"]).to(self.device)
+                    self.jev_head_trained = True
+                    print(f"  [1/5 Audio Ear & Brain] Loaded calibrated Jev decision head from: {HEAD_NPZ}")
+            except Exception as e:
+                logger.warning(f"Could not load calibrated Jev head from {HEAD_NPZ}: {e}")
+                self.jev_head_trained = False
+
         self.model.eval()
 
         # Warm-up CUDA
@@ -556,27 +573,40 @@ class VaniShieldCore:
             transcript, flagged_kw, transcription_err = self.transcribe_and_spot_keywords(audio_chunk_16k)
 
         # 4. Context Intent Analysis (Preventing harmless words from triggering fraud locks)
-        # Check for safety advisories / negations (e.g. "Never share your OTP", "Do not give PIN")
-        AWARENESS_NEGATIONS = [
-            r"\b(never|don'?t|do not|should not|must not|beware|alert|warning|caution|avoid|refuse|scam alert|fraud awareness)\b",
-            r"(मत\s*(?:दीजिए|देना|बताइए|शेयर|करना)|कभी\s*(?:मत|ना)|सावधान|धोखाधड़ी|सतर्क)",
-            r"(কখনও\s*(?:দেবেন না|বলবেন না)|শেয়ার\s*করবেন না|সাবধান|সতর্ক|দেবেন না|বলবেন না)"
+        # Explicit warnings AGAINST disclosing sensitive credentials (e.g. RBI / Bank awareness advisories)
+        # Avoid matching generic standalone words ("alert", "warning", "avoid") which scammers use to create urgency
+        AWARENESS_WARNING_PATTERNS = [
+            r"\b(?:never|do not|don'?t|should not|must not)\s+(?:share|give|disclose|tell|send|enter)\b.*?\b(?:otp|pin|cvv|password|details|credential|card number)\b",
+            r"\b(?:bank|rbi|police)\s+(?:never|will never|does not)\s+(?:ask|call to ask|demand)\b.*?\b(?:otp|pin|cvv|password|credentials)\b",
+            r"(?:ओटीपी|पिन|सीवीवी|पासवर्ड|डिटेल्स)\s*(?:कभी\s*)?(?:मत|ना)\s*(?:दीजिए|देना|बताइए|शेयर|करना)",
+            r"बैंक\s*(?:कभी\s*)?(?:ओटीपी|पिन|पासवर्ड)\s*नहीं\s*(?:मांगता|मांगती)",
+            r"(?:ওটিপি|পিন|সিভিভি|পাসওয়ার্ড)\s*(?:কখনও\s*)?(?:কাউকে\s*)?(?:দেবেন না|বলবেন না|শেয়ার করবেন না)",
+            r"ব্যাংক\s*(?:কখনও\s*)?(?:ওটিপি|পিন|পাসওয়ার্ড)\s*চায় না"
         ]
-        is_awareness_warning = bool(transcript and any(re.search(neg, transcript, flags=re.IGNORECASE) for neg in AWARENESS_NEGATIONS))
+        has_awareness_advice = bool(transcript and any(re.search(p, transcript, flags=re.IGNORECASE) for p in AWARENESS_WARNING_PATTERNS))
 
         # Check for active fraudulent demand / coercion cues:
         DEMAND_PATTERNS = [
-            r"\b(share|send|tell|give|provide|transfer|enter|verify|update|reverse|confirm|pay|deposit)\b",
-            r"\b(immediately|right now|urgent|urgently|within \d+ minutes|otherwise|blocked|suspended|warrant|arrest|illegal|jail)\b",
-            r"(भेजो|दीजिए|दे दो|बताओ|शेयर करो|ट्रांसफर करो|डालो|तुरंत|अवैध|ब्लॉक|गिरफ्तारी|वॉरंट)",
-            r"(পাঠান|দিন|শেয়ার করুন|বলুন|ট্রান্সফার করুন|অবিলম্বে|স্থগিত|গ্রেফতার|বন্ধ হবে)"
+            r"\b(?:share|send|tell|give|provide|transfer|enter|verify|update|reverse|confirm|pay|deposit)\b",
+            r"\b(?:immediately|right now|urgent|urgently|within \d+ minutes|otherwise|blocked|suspended|warrant|arrest|illegal|jail)\b",
+            r"(?:भेजो|दीजिए|दे दो|बताओ|शेयर करो|ट्रांसफर करो|डालो|तुरंत|अवैध|ब्लॉक|गिरफ्तारी|वॉरंट)",
+            r"(?:পাঠান|দিন|শেয়ার করুন|বলুন|ট্রান্সফার করুন|অবিলম্বে|স্থগিত|গ্রেফতার|বন্ধ হবে)"
         ]
         has_fraud_demand = bool(transcript and any(re.search(dp, transcript, flags=re.IGNORECASE) for dp in DEMAND_PATTERNS))
 
-        # Query Jev decision head if embedding server is active
+        # Check if transcript contains an affirmative fraud demand outside of the matched warning phrase
+        cleaned_for_demand = transcript or ""
+        for p in AWARENESS_WARNING_PATTERNS:
+            cleaned_for_demand = re.sub(p, " ", cleaned_for_demand, flags=re.IGNORECASE)
+        has_independent_fraud_demand = bool(any(re.search(dp, cleaned_for_demand, flags=re.IGNORECASE) for dp in DEMAND_PATTERNS))
+
+        # Awareness exemption applies ONLY IF explicit awareness advice is present AND there is no independent fraud demand
+        is_awareness_warning = bool(has_awareness_advice and not (has_independent_fraud_demand and flagged_kw))
+
+        # Query Jev decision head only if trained head weights are loaded
         jev_p = 0.0
         used_jev_head = False
-        if transcript and not is_awareness_warning:
+        if transcript and not is_awareness_warning and self.jev_head_trained:
             lang = self.detect_language(transcript)
             emb = self.get_jev_embedding(transcript, lang)
             if emb is not None and np.any(emb):
@@ -586,6 +616,8 @@ class VaniShieldCore:
                         logits_jev = self.model.jev_head(self.model.jev_norm(emb_tensor))
                         jev_prob = float(torch.softmax(logits_jev, dim=-1)[0, 1].item() * 100.0)
                         jev_p = round(jev_prob, 1)
+                        if flagged_kw and has_fraud_demand:
+                            jev_p = max(jev_p, 75.0)
                         used_jev_head = True
                 except Exception as e:
                     logger.debug(f"Jev decision head evaluation fallback: {e}")

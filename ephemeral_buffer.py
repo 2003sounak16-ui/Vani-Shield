@@ -32,9 +32,11 @@ class EphemeralRAMBuffer:
     """
     def __init__(self, max_duration_sec: float = 3.5, sample_rate: int = 16000):
         self.sample_rate = sample_rate
+        self.max_duration_sec = max_duration_sec
         self.max_samples = int(max_duration_sec * sample_rate)
         # Store (timestamp, numpy_chunk)
         self.buffers = defaultdict(deque)
+        self.last_activity = {}
 
     def push_chunk(self, session_id: str, raw_pcm_bytes: bytes):
         """Pushes raw PCM bytes into volatile RAM with timestamp."""
@@ -45,18 +47,40 @@ class EphemeralRAMBuffer:
             arr = np.frombuffer(raw_pcm_bytes, dtype=np.float32)
 
         now = time.time()
+        self.last_activity[session_id] = now
         q = self.buffers[session_id]
         q.append((now, arr))
 
-        # Evict chunks older than max_duration_sec (strict ephemeral sliding window)
-        cutoff = now - 4.0
+        # Evict chunks older than configured max_duration_sec
+        cutoff = now - self.max_duration_sec
         while q and q[0][0] < cutoff:
-            old_time, old_arr = q.popleft()
+            _, old_arr = q.popleft()
             old_arr.fill(0.0)  # Wipe volatile memory contents
+
+    def evict_expired(self, now: float = None):
+        """Proactively evicts expired audio across all sessions independent of incoming packets."""
+        now = now or time.time()
+        cutoff = now - self.max_duration_sec
+        idle_sessions = []
+        for sid, q in list(self.buffers.items()):
+            while q and q[0][0] < cutoff:
+                _, old_arr = q.popleft()
+                old_arr.fill(0.0)
+            if not q and (now - self.last_activity.get(sid, 0) > self.max_duration_sec):
+                idle_sessions.append(sid)
+        for sid in idle_sessions:
+            self.purge_session(sid)
 
     def get_eval_window(self, session_id: str) -> np.ndarray:
         """Retrieves continuous float32 audio window (up to max_samples) directly from RAM."""
+        # Evict expired chunks before constructing evaluation window
+        now = time.time()
+        cutoff = now - self.max_duration_sec
         q = self.buffers[session_id]
+        while q and q[0][0] < cutoff:
+            _, old_arr = q.popleft()
+            old_arr.fill(0.0)
+
         if not q:
             return np.zeros(self.max_samples, dtype=np.float32)
 
@@ -76,6 +100,7 @@ class EphemeralRAMBuffer:
                 _, arr = q.popleft()
                 arr.fill(0.0)
             del self.buffers[session_id]
+        self.last_activity.pop(session_id, None)
 
 # Singleton instance
 ram_ring_buffer = EphemeralRAMBuffer(max_duration_sec=3.5, sample_rate=16000)

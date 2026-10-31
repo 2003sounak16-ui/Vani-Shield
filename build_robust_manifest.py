@@ -15,10 +15,40 @@ REQUIRED = {"path", "label", "source", "speaker_id"}
 
 
 def make_split(df: pd.DataFrame, holdout: float, seed: int, split_name: str):
-    group = df["speaker_id"].fillna("").astype(str)
-    group = group.where(group.str.len() > 0, df["source"].astype(str))
+    # Ensure neither speakers nor sources cross splits by grouping via connected components
+    parent = {}
+
+    def find(x):
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for _, row in df.iterrows():
+        src_node = f"src_{str(row.get('source', '')).strip()}"
+        if src_node not in parent:
+            parent[src_node] = src_node
+        spk = str(row.get("speaker_id", "") or "").strip()
+        if spk and spk.lower() != "nan":
+            spk_node = f"spk_{spk}"
+            if spk_node not in parent:
+                parent[spk_node] = spk_node
+            union(src_node, spk_node)
+
+    group_ids = []
+    for _, row in df.iterrows():
+        spk = str(row.get("speaker_id", "") or "").strip()
+        if spk and spk.lower() != "nan":
+            group_ids.append(find(f"spk_{spk}"))
+        else:
+            group_ids.append(find(f"src_{str(row.get('source', '')).strip()}"))
+
     splitter = GroupShuffleSplit(n_splits=1, test_size=holdout, random_state=seed)
-    train_idx, eval_idx = next(splitter.split(df, groups=group))
+    train_idx, eval_idx = next(splitter.split(df, groups=group_ids))
     result = df.copy()
     result["split"] = "train"
     result.iloc[eval_idx, result.columns.get_loc("split")] = split_name
