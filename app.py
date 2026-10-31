@@ -830,6 +830,65 @@ async def get_stage_metadata(lang: str = "en"):
 # re-fused from the session's accumulated stages and whole-call EMA, not from
 # the single window that happened to arrive last.
 # -------------------------------------------------------------
+# -------------------------------------------------------------
+# OBSERVERS
+#
+# A call happens on one socket (the phone) but is useful to watch from
+# another (the operator dashboard). Frames are therefore fanned out to any
+# observer subscribed to that session id, read-only.
+#
+# This is gated, unlike the rest of the read surface, because an observer
+# receives the live transcript - the actual words someone is speaking into
+# their phone. An ungated version of this endpoint would turn a product whose
+# premise is "nothing is recorded" into a wiretap that anyone on the box can
+# attach to. Observers authenticate with the same control PIN as the
+# blacklist, sent as the first message rather than in the URL so it does not
+# end up in access logs or browser history.
+# -------------------------------------------------------------
+OBSERVER_AUTH_TIMEOUT_SECONDS = 5.0
+
+_observers: Dict[str, set] = {}
+_observers_lock = asyncio.Lock()
+
+
+async def _register_observer(session_id: str, websocket: WebSocket) -> None:
+    async with _observers_lock:
+        _observers.setdefault(session_id, set()).add(websocket)
+
+
+async def _unregister_observer(session_id: str, websocket: WebSocket) -> None:
+    async with _observers_lock:
+        watchers = _observers.get(session_id)
+        if not watchers:
+            return
+        watchers.discard(websocket)
+        if not watchers:
+            _observers.pop(session_id, None)
+
+
+async def _publish_to_observers(session_id: str, frame: dict) -> None:
+    """
+    Fans one frame out to every observer of a session.
+
+    A failing observer is dropped rather than allowed to break the call it is
+    watching: the person on the phone must not lose their scam warning because
+    a dashboard tab went away.
+    """
+    async with _observers_lock:
+        watchers = list(_observers.get(session_id, ()))
+    if not watchers:
+        return
+
+    payload = dict(frame)
+    payload["observed"] = True
+    for watcher in watchers:
+        try:
+            await watcher.send_json(payload)
+        except Exception:
+            await _unregister_observer(session_id, watcher)
+
+
+
 class _CallAccumulator:
     """Sticky per-call evidence that the stateless engine cannot carry."""
 
@@ -1029,6 +1088,7 @@ async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
             if step == total_steps - 1:
                 frame["call_state"] = "ENDED"
             await websocket.send_json(frame)
+            await _publish_to_observers(session_id, frame)
 
             if step < total_steps - 1:
                 await asyncio.sleep(REPLAY_STEP_SECONDS)
@@ -1065,6 +1125,86 @@ async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
 # WEBSOCKET: REAL-TIME STREAMING & EPHEMERAL RAM BUFFER
 
 # -------------------------------------------------------------
+
+@app.get("/api/sessions")
+async def list_active_sessions(pin: Optional[str] = Header(None, alias=CONTROL_PIN_HEADER)):
+    """
+    Lists calls currently in progress, so a dashboard can pick one to watch.
+
+    PIN-gated and numbers are masked to their last four digits: knowing who is
+    on the phone right now is itself disclosure, and the picker does not need
+    the full number to work.
+    """
+    require_control_pin(pin)
+    sessions = []
+    for session in session_registry.all():
+        phone = session.phone_number or ""
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        sessions.append({
+            "session_id": session.session_id,
+            "caller_masked": f"\u2026{digits[-4:]}" if len(digits) >= 4 else "unknown",
+            "elapsed_sec": session.elapsed_sec,
+            "lang": session.lang,
+            "stages": session.stages,
+            "call_state": "ACTIVE" if session.call_state == "LIVE" else session.call_state,
+            "observers": len(_observers.get(session.session_id, ())),
+        })
+    sessions.sort(key=lambda s: s["elapsed_sec"], reverse=True)
+    return {"sessions": sessions, "count": len(sessions)}
+
+
+@app.websocket("/ws/observe/{session_id}")
+async def observe_session_websocket(websocket: WebSocket, session_id: str):
+    """
+    Read-only subscription to another session's frames.
+
+    Accepts no control messages at all. An observer cannot set the caller,
+    block, or end the call it is watching - it only receives what the call's
+    own socket is already being sent.
+    """
+    await websocket.accept()
+
+    # Authenticate before anything about the call is disclosed, including
+    # whether a session by this id exists.
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=OBSERVER_AUTH_TIMEOUT_SECONDS)
+        pin = (json.loads(raw) or {}).get("pin")
+    except (asyncio.TimeoutError, ValueError, TypeError, WebSocketDisconnect):
+        await websocket.close(code=4401)
+        return
+
+    try:
+        require_control_pin(pin)
+    except HTTPException as exc:
+        try:
+            await websocket.send_json({"status": "error", "error": exc.detail})
+        finally:
+            await websocket.close(code=4403)
+        return
+
+    if session_registry.get(session_id) is None:
+        await websocket.send_json({"status": "error", "error": f"No active session '{session_id}'."})
+        await websocket.close(code=4404)
+        return
+
+    await _register_observer(session_id, websocket)
+    logger.info(f"Observer attached to session {session_id}.")
+    await websocket.send_json({"status": "observing", "session_id": session_id})
+
+    try:
+        # Stay open until the observer leaves. Anything it sends is ignored:
+        # observers watch, they do not steer.
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug(f"Observer on {session_id} closed: {e}")
+    finally:
+        await _unregister_observer(session_id, websocket)
+        logger.info(f"Observer detached from session {session_id}.")
+
+
 
 @app.websocket("/ws/live-call")
 
@@ -1186,6 +1326,7 @@ async def live_call_websocket(websocket: WebSocket):
                     banking_state.risk_score = frame.get("unified_risk_score", 95.0)
                     banking_state.reason = f"Automated Defense: {frame.get('threat_type', 'Scam detected')}"
                 await websocket.send_json(frame)
+                await _publish_to_observers(session_id, frame)
 
             elif "text" in message:
                 try:
