@@ -348,7 +348,7 @@ def _synth_events(analysis, fusion: dict, breaker_engaged: bool, lang: str = "en
     return events
 
 
-def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float) -> str:
+def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float, transcription_failed: bool = False) -> str:
     """
     Names the threat consistently with the fused score.
 
@@ -360,6 +360,9 @@ def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float) -> str:
     """
     if fusion.get("hard_rule") == "KNOWN_SCAMMER_NUMBER":
         return "BLACKLISTED_SCAMMER"
+
+    if transcription_failed:
+        return "UNVERIFIED_TRANSCRIPTION_FAILED"
 
     synthetic = acoustic_prob >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD
     demands_money = scam_stages.CREDENTIAL in (stages or [])
@@ -665,7 +668,7 @@ class VaniShieldCore:
         single place both substitutions live: the demo stub, and upstream's
         fallback for an install with no torch.
         """
-        if self.demo_scorer is not None:
+        if getattr(self, "demo_scorer", None) is not None:
             return self.demo_scorer.score_windows_percent(clips)
 
         if (
@@ -1801,7 +1804,7 @@ class VaniShieldCore:
         )
         final_risk = fusion["risk_score"]
         legacy_threat_type = threat_type
-        threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob)
+        threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob, transcription_failed=transcription_failed)
 
 
 

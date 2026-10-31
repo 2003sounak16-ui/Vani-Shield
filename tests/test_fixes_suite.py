@@ -154,10 +154,11 @@ class TestVaniShieldFixes(unittest.TestCase):
         engine.blacklist = {}
         engine.jev_head_trained = False
         engine.w2v_model_path = None
+        engine.demo_scorer = None
 
         # Simulate ASR failure (e.g. timeout or exception during speech recognition)
         engine.transcribe_and_spot_keywords = MagicMock(
-            return_value=("", [], "ASR model timeout / inference crash")
+            return_value=("", [], "ASR model timeout / inference crash", "en")
         )
         engine.analyze_telecom = MagicMock(
             return_value={"is_blacklisted": False, "is_voip_spoofed": False, "location": "Bengaluru"}
