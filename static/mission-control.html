@@ -4312,7 +4312,16 @@ function toggleObserve() {
   else openObservePicker();
 }
 
+let sessionsReqSeq = 0;          // guards against out-of-order poll responses
+
 async function refreshSessions() {
+  // The picker polls every 5s. A slow response can land after a newer one and
+  // repaint the list with sessions that have since ended - hiding a live call
+  // or offering a dead one. Each request takes a ticket and only the latest
+  // is allowed to render.
+  const seq = ++sessionsReqSeq;
+  const stale = () => seq !== sessionsReqSeq;
+
   const field = $('obsPin');
   const typed = field ? str(field.value).trim() : '';
   if (typed) { controlPin = typed; field.value = ''; }   // keep it out of the DOM
@@ -4324,15 +4333,21 @@ async function refreshSessions() {
       headers: { 'Accept': 'application/json', 'X-VaniShield-Pin': controlPin }
     });
   } catch (err) {
+    if (stale()) return;
     setObsMsg('' + (err && err.message || 'network error'), true);
     return;
   }
+  if (stale()) return;
   if (res.status === 403) { controlPin = ''; setObsMsg(T('pinWrong'), true); renderSessions([]); return; }
   if (res.status === 503) { setObsMsg(T('pinMissing'), true); renderSessions([]); return; }
   if (!res.ok) { setObsMsg('HTTP ' + res.status, true); return; }
 
   let data = null;
-  try { data = await res.json(); } catch (err) { setObsMsg('malformed session list', true); return; }
+  try { data = await res.json(); } catch (err) {
+    if (stale()) return;
+    setObsMsg('malformed session list', true); return;
+  }
+  if (stale()) return;
   const list = (data && Array.isArray(data.sessions)) ? data.sessions : [];
   renderSessions(list);
   setObsMsg(list.length ? '' : T('noCalls'), false);
