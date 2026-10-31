@@ -1,0 +1,21 @@
+version: '1'
+
+# Ignore non-code assets, large datasets, audio samples, and model weights to keep diff within quota
+ignore:
+  - ".git"
+  - ".venv"
+  - "venv"
+  - "env"
+  - "audio/**"
+  - "data_demo/**"
+  - "test_multilingual_calls/**"
+  - "**/*.csv"
+  - "**/*.json"
+  - "**/*.npz"
+  - "**/*.wav"
+  - "**/*.ogg"
+  - "**/*.mpeg"
+  - "**/*.mp4"
+  - "**/*.pt"
+  - "**/*.onnx"
+  - "static/**"
