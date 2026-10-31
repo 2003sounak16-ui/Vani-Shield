@@ -4,7 +4,9 @@ Team CypherEye | Project VaniShield AI
 Provides automated and manual payment freeze endpoints for UPI and Net Banking.
 """
 
+import os
 import time
+import hmac
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -25,13 +27,8 @@ class LockRequest(BaseModel):
     reason: str
     risk_score: float = 85.0
 
-import hmac
-import os
-CONFIGURED_PIN = os.environ.get("VANISHIELD_UNLOCK_PIN", "1234")
-
 class UnlockRequest(BaseModel):
     pin: str
-    reason: str = "Biometrically authorized user release"
 
 class TransferRequest(BaseModel):
     payee: str
@@ -68,12 +65,13 @@ async def lock_banking(req: LockRequest):
 
 @router.post("/unlock")
 async def unlock_banking(req: UnlockRequest):
-    """Release banking hold via PIN verification."""
-    if not req.pin or not hmac.compare_digest(req.pin.strip(), CONFIGURED_PIN):
+    """Release banking hold via PIN verification with timing-attack resistant comparison."""
+    expected_pin = os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))
+    if not req.pin or not hmac.compare_digest(req.pin, expected_pin):
         raise HTTPException(status_code=403, detail="Invalid security PIN.")
     state.locked = False
     state.risk_score = 0.0
-    state.reason = req.reason or "Biometrically authorized user release"
+    state.reason = "Biometrically authorized user release"
     state.locked_at = None
     return {
         "success": True,

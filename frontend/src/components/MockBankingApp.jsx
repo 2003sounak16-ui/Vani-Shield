@@ -17,14 +17,14 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
     setTimeout(() => setTransferMsg(null), 4000);
   };
 
-  const handleUnlockSubmit = (e) => {
+  const handleUnlockSubmit = async (e) => {
     e.preventDefault();
-    if (pinInput === '1234') {
-      onUnlock && onUnlock();
-      setShowPinModal(false);
-      setPinInput('');
-    } else {
-      alert('Invalid Security PIN. Default test PIN is 1234.');
+    if (onUnlock) {
+      const ok = await onUnlock(pinInput);
+      if (ok !== false) {
+        setShowPinModal(false);
+        setPinInput('');
+      }
     }
   };
 

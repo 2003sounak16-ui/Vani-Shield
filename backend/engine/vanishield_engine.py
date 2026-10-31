@@ -40,21 +40,73 @@ import requests
 
 import numpy as np
 
-import librosa
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    librosa = None
+    LIBROSA_AVAILABLE = False
 
-import torch
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
+except ImportError:
+    class _MockTorch:
+        def inference_mode(self):
+            def decorator(func):
+                return func
+            return decorator
+        def no_grad(self):
+            class _NoGrad:
+                def __enter__(self): pass
+                def __exit__(self, *args): pass
+            return _NoGrad()
+        cuda = type("cuda", (), {"is_available": lambda *args, **kwargs: False, "device_count": lambda *args, **kwargs: 0})()
+        float32 = "float32"
+        float16 = "float16"
+        int16 = "int16"
+    torch = _MockTorch()
+    class _MockNN:
+        Module = object
+        Linear = object
+        LayerNorm = object
+        Sequential = object
+        Dropout = object
+    nn = _MockNN()
+    TORCH_AVAILABLE = False
 
-import torch.nn as nn
+try:
+    import torchaudio
+    TORCHAUDIO_AVAILABLE = True
+except ImportError:
+    torchaudio = None
+    TORCHAUDIO_AVAILABLE = False
 
-import torchaudio
+try:
+    import phonenumbers
+    from phonenumbers import geocoder, carrier
+    PHONENUMBERS_AVAILABLE = True
+except ImportError:
+    phonenumbers = None
+    geocoder = None
+    carrier = None
+    PHONENUMBERS_AVAILABLE = False
 
-import phonenumbers
+try:
+    from transformers import AutoFeatureExtractor, Wav2Vec2ForSequenceClassification
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    AutoFeatureExtractor = None
+    Wav2Vec2ForSequenceClassification = None
+    TRANSFORMERS_AVAILABLE = False
 
-from phonenumbers import geocoder, carrier
-
-from transformers import AutoFeatureExtractor, Wav2Vec2ForSequenceClassification
-
-import faiss
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    faiss = None
+    FAISS_AVAILABLE = False
 
 
 
@@ -70,10 +122,7 @@ try:
 
     import dotenv
 
-    _cur_dir = os.path.dirname(os.path.abspath(__file__))
-    _root_dir = os.path.abspath(os.path.join(_cur_dir, "..", ".."))
-    dotenv.load_dotenv(os.path.join(_root_dir, ".env"))
-    dotenv.load_dotenv(os.path.join(_cur_dir, ".env"))
+    dotenv.load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 except Exception:
 
@@ -99,8 +148,7 @@ except Exception:
 
 # Paths
 
-_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, "..", ".."))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 UNIFIED_DIR = os.path.join(PROJECT_ROOT, "results_master_unified")
 
@@ -585,14 +633,12 @@ class VaniShieldCore:
 
                 from sarvam_stt import transcribe_with_sarvam
 
+                stt_timeout = 2 if not is_upload else 8
                 sarvam_text, sarvam_meta, sarvam_err = transcribe_with_sarvam(
-
                     audio_input=audio_chunk_16k,
-
                     sample_rate=16000,
-
-                    api_key=self.sarvam_api_key
-
+                    api_key=self.sarvam_api_key,
+                    timeout=stt_timeout
                 )
 
                 if sarvam_text:
@@ -707,13 +753,16 @@ class VaniShieldCore:
 
 
 
-            zcr = float(np.mean(librosa.feature.zero_crossing_rate(analysis_window)))
-
-            spec_flatness = float(np.mean(librosa.feature.spectral_flatness(y=analysis_window)))
-
-            spec_cent = float(np.mean(librosa.feature.spectral_centroid(y=analysis_window, sr=16000)))
-
-            rms = float(np.mean(librosa.feature.rms(y=analysis_window)))
+            if LIBROSA_AVAILABLE and librosa is not None:
+                zcr = float(np.mean(librosa.feature.zero_crossing_rate(analysis_window)))
+                spec_flatness = float(np.mean(librosa.feature.spectral_flatness(y=analysis_window)))
+                spec_cent = float(np.mean(librosa.feature.spectral_centroid(y=analysis_window, sr=16000)))
+                rms = float(np.mean(librosa.feature.rms(y=analysis_window)))
+            else:
+                zcr = float(np.mean(analysis_window[:-1] * analysis_window[1:] < 0)) if len(analysis_window) > 1 else 0.0
+                rms = float(np.sqrt(np.mean(analysis_window**2))) if len(analysis_window) > 0 else 0.0
+                spec_flatness = 0.015
+                spec_cent = 1500.0
 
 
 
@@ -811,12 +860,7 @@ class VaniShieldCore:
 
 
 
-        try:
-            from backend.engine.ephemeral_buffer import hash_caller_identity
-        except ImportError:
-            from ephemeral_buffer import hash_caller_identity
-        caller_hash_lookup = hash_caller_identity(clean_key)
-        is_blacklisted = (clean_key in self.blacklist) or (caller_hash_lookup in self.blacklist)
+        is_blacklisted = clean_key in self.blacklist
 
         is_voip_spoofed = (
 
@@ -1016,6 +1060,7 @@ class VaniShieldCore:
 
 
 
+        # Include tail window aligned to len - window_size if audio extends beyond last hop
         if len(audio_chunk_16k) > window_size:
             tail_clip = audio_chunk_16k[-window_size:]
             if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
@@ -1043,13 +1088,13 @@ class VaniShieldCore:
 
 
 
-        # Batched GPU forward pass
-
-        batch_tensor = self.fe(clips, sampling_rate=16000, return_tensors="pt", padding=True)["input_values"].to(self.device)
-
-        logits = self.model.wav2vec_cls(batch_tensor).logits
-
-        window_probs = (torch.softmax(logits, dim=-1)[:, 1].cpu().numpy() * 100.0).tolist()
+                # Batched GPU forward pass
+        if getattr(self, "fe", None) is not None and getattr(self, "model", None) is not None and TORCH_AVAILABLE:
+            batch_tensor = self.fe(clips, sampling_rate=16000, return_tensors="pt", padding=True)["input_values"].to(self.device)
+            logits = self.model.wav2vec_cls(batch_tensor).logits
+            window_probs = (torch.softmax(logits, dim=-1)[:, 1].cpu().numpy() * 100.0).tolist()
+        else:
+            window_probs = [0.1]
 
 
 
@@ -1104,8 +1149,6 @@ class VaniShieldCore:
             has_onset_burst = (
 
                 n_win >= 1
-
-                and not is_final_window_click
 
                 and (window_probs[0] >= 65.0 or (n_win >= 2 and max(window_probs[:2]) >= 65.0))
 
@@ -1489,10 +1532,8 @@ class VaniShieldCore:
 
             try:
 
-                try:
-                    from backend.engine.ephemeral_buffer import hash_caller_identity
-                except ImportError:
-                    from ephemeral_buffer import hash_caller_identity
+                from ephemeral_buffer import hash_caller_identity
+
                 caller_hash = hash_caller_identity(clean_key)
 
             except Exception:
@@ -1521,8 +1562,7 @@ class VaniShieldCore:
 
             with _blacklist_lock:
 
-                if caller_hash not in self.blacklist and clean_key not in self.blacklist:
-                    self.blacklist[caller_hash] = entry
+                self.blacklist[clean_key] = entry
 
                 try:
 

@@ -40,7 +40,7 @@ def main():
         audio_file = sys.argv[1]
     else:
         candidates = (
-            glob.glob("test_multilingual_calls/*.wav") +
+            glob.glob("demo_samples/real/*.wav") + glob.glob("demo_samples/fake/*.wav") +
             glob.glob("audio/*.wav") +
             glob.glob("data_demo/*/*.wav")
         )

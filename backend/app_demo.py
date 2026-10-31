@@ -96,18 +96,9 @@ from pydantic import BaseModel
 
 
 
-# Setup sys.path for robust modular resolution
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+from vanishield_engine import core_engine, JEV_SERVER_URL, PROJECT_ROOT
 
-try:
-    from backend.engine.vanishield_engine import core_engine, JEV_SERVER_URL
-    from backend.engine.ephemeral_buffer import ram_ring_buffer, hash_caller_identity
-except ImportError:
-    from vanishield_engine import core_engine, JEV_SERVER_URL
-    from ephemeral_buffer import ram_ring_buffer, hash_caller_identity
-
+from ephemeral_buffer import ram_ring_buffer, hash_caller_identity
 
 
 
@@ -257,7 +248,7 @@ PRESET_CALLS = {
 
     "en_scam": {
 
-        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "scam_sbi_otp.wav"),
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_en_scam.wav"),
 
         "phone": "+91-1409988776 (VoIP Spoofed - International Gateway)",
 
@@ -277,7 +268,7 @@ PRESET_CALLS = {
 
     "bn_scam": {
 
-        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "scam_card_cvv.wav"),
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_bn_scam.wav"),
 
         "phone": "+91-1401122334 (Spoofed Virtual PBX)",
 
@@ -297,7 +288,7 @@ PRESET_CALLS = {
 
     "hi_scam": {
 
-        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "scam_kyc_hindi.wav"),
+        "audio_file": os.path.join(PROJECT_ROOT, "demo_samples", "fake", "call_hi_scam.wav"),
 
         "phone": "+91-1407766554 (Unregistered VoIP Line)",
 
@@ -319,7 +310,21 @@ def _sync_simulate_preset(preset: dict) -> dict:
 
     if not os.path.exists(path):
 
-        raise FileNotFoundError(f"Preset audio file fixture not found: {path}")
+        fname = os.path.basename(path)
+
+        for sub in ["real", "fake", ""]:
+
+            cand = os.path.join(PROJECT_ROOT, "demo_samples", sub, fname) if sub else os.path.join(PROJECT_ROOT, "demo_samples", fname)
+
+            if os.path.exists(cand):
+
+                path = cand
+
+                break
+
+        if not os.path.exists(path):
+
+            raise FileNotFoundError(f"Preset audio file fixture not found: {path}")
 
 
 
@@ -761,7 +766,7 @@ async def live_call_websocket(websocket: WebSocket):
 
                         caller_phone = str(new_phone).strip()
 
-                        logger.info(f"Session {session_id} updated caller hash: {hash_caller_identity(caller_phone)}")
+                        logger.info(f"Session {session_id} updated caller ID to: {caller_phone}")
 
                 elif action == "END_CALL":
 
@@ -867,6 +872,31 @@ async def get_stt_status():
 
 
 
+MAX_TTS_TEXT_LENGTH = 500
+_tts_lock = threading.Lock()
+_tts_timestamps = []
+MAX_TTS_PER_MINUTE = 10
+
+def _check_tts_budget_and_length(text: str):
+    stripped = text.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    if len(stripped) > MAX_TTS_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text exceeds maximum permitted length ({MAX_TTS_TEXT_LENGTH} characters)."
+        )
+    now = time.time()
+    with _tts_lock:
+        _tts_timestamps[:] = [t for t in _tts_timestamps if now - t < 60.0]
+        if len(_tts_timestamps) >= MAX_TTS_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail="TTS generation rate limit / budget quota reached. Please try again in 1 minute."
+            )
+        _tts_timestamps.append(now)
+
+
 @app.get("/api/tts/voices")
 
 async def get_tts_voices():
@@ -875,7 +905,8 @@ async def get_tts_voices():
 
     has_key = is_elevenlabs_available()
 
-    voices = fetch_account_voices() if has_key else get_curated_voices()
+    loop = asyncio.get_running_loop()
+    voices = await loop.run_in_executor(ANALYSIS_EXECUTOR, fetch_account_voices) if has_key else get_curated_voices()
 
     return {
 
@@ -901,14 +932,20 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 
 
-    cleaned_text = req.text.strip()
-    if not cleaned_text:
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
-    if len(cleaned_text) > 1000:
-        raise HTTPException(status_code=413, detail="Payload Too Large: Text exceeds maximum limit of 1000 characters.")
+    if not req.text.strip():
 
-    async with UPLOAD_SEMAPHORE:
-        audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+
+
+
+    _check_tts_budget_and_length(req.text)
+    loop = asyncio.get_running_loop()
+    audio_bytes, meta, err = await loop.run_in_executor(
+        ANALYSIS_EXECUTOR,
+        synthesize_with_fallback,
+        req.text,
+        req.voice_id or "21m00Tcm4TlvDq8ikWAM"
+    )
 
     if err and not audio_bytes:
 
@@ -944,14 +981,20 @@ async def tts_simulate_attack(req: SynthesizeRequest):
 
 
 
-    cleaned_text = req.text.strip()
-    if not cleaned_text:
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
-    if len(cleaned_text) > 1000:
-        raise HTTPException(status_code=413, detail="Payload Too Large: Text exceeds maximum limit of 1000 characters.")
+    if not req.text.strip():
 
-    async with UPLOAD_SEMAPHORE:
-        audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+
+
+
+    _check_tts_budget_and_length(req.text)
+    loop = asyncio.get_running_loop()
+    audio_bytes, meta, err = await loop.run_in_executor(
+        ANALYSIS_EXECUTOR,
+        synthesize_with_fallback,
+        req.text,
+        req.voice_id or "21m00Tcm4TlvDq8ikWAM"
+    )
 
     if err and not audio_bytes:
 

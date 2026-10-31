@@ -73,6 +73,17 @@ C:\AI\VoiceCloning\
 
 ## 🚀 Quick Startup Guide
 
+### 0. Install Dependencies
+```powershell
+# Install backend Python dependencies
+pip install -r requirements.txt
+
+# Install frontend Node packages
+cd frontend
+npm install
+cd ..
+```
+
 ### 1. Run Hardware Diagnostic
 ```powershell
 python check_env.py
@@ -93,18 +104,13 @@ python check_env.py
   --port 9931
 ```
 
-### 2b. Install Project Dependencies
-```powershell
-pip install -r requirements.txt
-cd frontend && npm install && cd ..
-```
-
 ### 3. Launch FastAPI Streaming Backend (Port 8000)
 ```powershell
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 *Interactive Swagger Documentation*: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)  
-*Health Check*: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+*Health Check*: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)  
+*Architecture Note*: `backend.main:app` provides the modular streaming architecture for live demos and interactive judging, featuring real-time WebSockets, in-memory circuit breakers, and DPDP-compliant telemetry. For standalone monolithic telephony evaluation, use `python app.py`.
 
 ### 4. Launch React + Vite Dashboard (Port 5173)
 ```powershell
@@ -121,7 +127,7 @@ npm run dev
 ```powershell
 python ml_pipeline\test_joint_scam.py
 ```
-*Verifies joint inference across Wav2Vec 2.0 acoustic forensic model and Jev-Omni 12B decision head.*
+*Verifies joint inference across Wav2Vec 2.0 acoustic forensic model and Jev-Omni 12B decision head, evaluating audio frames and transcribed conversational intent.*
 
 ### Unseen Calls Generalization Test
 ```powershell
@@ -139,8 +145,8 @@ python caller_tracker.py --list
 
 ## 🔒 India DPDP Act 2023 Compliance
 - **Zero Raw Audio on Disk**: Audio payloads stream entirely inside volatile in-memory ring buffers (`EphemeralRAMBuffer`).
-- **Configured Volatile Retention**: Audio payloads are retained strictly in a sliding in-memory ring buffer (~3.5–4.0s) and automatically purged without persistent disk retention.
-- **HMAC-SHA256 Pseudonymization**: Caller phone numbers are securely hashed using keyed HMAC-SHA256 before blacklisting.
+- **Configurable Ephemeral Eviction Window**: Unprocessed or evaluated speech segments automatically expire from volatile memory (configured 4.0s retention window with background eviction).
+- **HMAC Pseudonymization**: Caller identities are cryptographically pseudonymized using keyed HMAC-SHA256 (`hash_caller_identity`). Raw phone numbers and unredacted call transcripts are never persisted in blacklist records.
 
 ---
 

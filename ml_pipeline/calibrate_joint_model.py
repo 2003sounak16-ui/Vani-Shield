@@ -97,20 +97,21 @@ def main():
         model = UnifiedJevOmniVoiceNet().to(device)
 
         real_files = sorted(glob.glob("data_pilot/pilot_real_*.wav"))[:4]
+        # Real conversational transcripts without class label leakage or audio filenames
         real_contexts = [
-            "Normal genuine human phone call about college project meeting.",
-            "Casual conversation with family member about dinner plans tonight.",
-            "Colleague discussing hackathon presentation slides and schedule.",
-            "Customer asking about normal store opening hours tomorrow."
+            "Hey, are we still meeting at the library at four for the compiler design assignment?",
+            "Hi Mom, I will be reaching home a bit late tonight, please do not wait for dinner.",
+            "Let us review the hackathon architecture slides before the presentation tomorrow morning.",
+            "Could you please confirm if the store is open on Sunday afternoon?"
         ]
 
         dataset = []
         for f, ctx in zip(real_files, real_contexts):
-            prompt = f"Transcript: {ctx}. Assess acoustic tone and conversational context."
+            prompt = f"Call Transcript: {ctx}. Evaluate caller intent, urgency markers, and social engineering indicators."
             dataset.append((f, prompt, 0, ctx))
-        for f, _, ctx in scams:
-            prompt = f"Transcript: {ctx}. Assess acoustic tone and conversational context."
-            dataset.append((f, prompt, 1, ctx))
+        for f, _, spoken_text in scams:
+            prompt = f"Call Transcript: {spoken_text}. Evaluate caller intent, urgency markers, and social engineering indicators."
+            dataset.append((f, prompt, 1, spoken_text))
 
         print(f"\nExtracting features for {len(dataset)} samples (Real vs. Neural TTS Scam)...")
         X_audio = torch.stack([load_wav_tensor(d[0], fe) for d in dataset]).to(device)

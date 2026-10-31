@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { MapPin, Globe, Shield } from 'lucide-react';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 export default function ScammerMap({ callerGeo, blacklist }) {
   const mapContainerRef = useRef(null);

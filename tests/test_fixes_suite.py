@@ -4,21 +4,22 @@ import unittest
 import numpy as np
 import pandas as pd
 import time
+from unittest.mock import MagicMock
 
 # Ensure repo root is on sys.path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(_curr_dir) if os.path.basename(_curr_dir) == "tests" else _curr_dir
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+_ml_dir = os.path.join(PROJECT_ROOT, "ml_pipeline")
+if _ml_dir not in sys.path:
+    sys.path.insert(0, _ml_dir)
 
+from ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
 try:
-    from backend.engine.ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
-except ImportError:
-    from ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
-
-try:
-    from ml_pipeline.build_robust_manifest import make_split
-except ImportError:
     from build_robust_manifest import make_split
+except ImportError:
+    from ml_pipeline.build_robust_manifest import make_split
 
 class TestVaniShieldFixes(unittest.TestCase):
 
@@ -53,9 +54,6 @@ class TestVaniShieldFixes(unittest.TestCase):
 
     def test_build_robust_manifest_connected_components(self):
         """Verify that rows sharing either a speaker or a source never cross splits."""
-        # Source 1 has speakers S1 and S2
-        # Source 2 has speakers S2 and S3 (connected via S2)
-        # Source 3 has speaker S4 (independent)
         data = {
             "path": [f"audio_{i}.wav" for i in range(7)],
             "label": [0, 0, 1, 1, 0, 1, 0],
@@ -70,7 +68,6 @@ class TestVaniShieldFixes(unittest.TestCase):
         train_speakers = set(split_df[split_df["split"] == "train"]["speaker_id"])
         val_speakers = set(split_df[split_df["split"] == "val"]["speaker_id"])
 
-        # No overlap between train and val sources or speakers
         self.assertEqual(train_sources.intersection(val_sources), set(), "Source leaked between train and val!")
         self.assertEqual(train_speakers.intersection(val_speakers), set(), "Speaker leaked between train and val!")
 
@@ -129,7 +126,7 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertFalse(is_aware_3, "Tricky scam with real demand must NOT be exempted")
 
     def test_decision_head_file_integrity(self):
-        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd."""
+        """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd, norm_w, norm_b."""
         head_path = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "ml_pipeline", "checkpoints", "voice-decision-head-f32.npz"))
         if not os.path.exists(head_path):
             head_path = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
@@ -139,28 +136,117 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertIn("b", data)
         self.assertIn("mu", data)
         self.assertIn("sd", data)
+        self.assertIn("norm_w", data)
+        self.assertIn("norm_b", data)
         self.assertEqual(data["W"].shape, (2, 3840))
         self.assertEqual(data["b"].shape, (2,))
+        self.assertEqual(data["norm_w"].shape, (3840,))
+        self.assertEqual(data["norm_b"].shape, (3840,))
 
     def test_transcription_failure_status(self):
-        """Verify that when transcription fails, the actual engine produces incomplete_analysis and HOLD action."""
-        try:
-            from backend.engine.vanishield_engine import core_engine
-        except ImportError:
-            from vanishield_engine import core_engine
+        """Verify that when transcription fails, evaluate_live_call produces incomplete_analysis rather than safe."""
+        from vanishield_engine import VaniShieldCore
 
-        # Mock transcribe_and_spot_keywords on core_engine
-        orig_method = core_engine.transcribe_and_spot_keywords
-        try:
-            core_engine.transcribe_and_spot_keywords = lambda *args, **kwargs: ("", [], "ASR model timeout")
-            dummy_audio = (np.sin(np.linspace(0, 100, 16000)) * 0.1).astype(np.float32)
-            result = core_engine.evaluate_live_call(dummy_audio, phone_number="+919876543210")
+        # Instantiate engine object without triggering heavyweight CUDA/HF model loads
+        engine = VaniShieldCore.__new__(VaniShieldCore)
+        engine.device = "cpu"
+        engine.asr_name = "Faster-Whisper Mock"
+        engine.blacklist = {}
+        engine.jev_head_trained = False
+        engine.w2v_model_path = None
 
-            self.assertEqual(result.get("status"), "incomplete_analysis")
-            self.assertEqual(result.get("threat_type"), "UNVERIFIED_TRANSCRIPTION_FAILED")
-            self.assertEqual(result.get("circuit_breaker", {}).get("action"), "HOLD_VERIFICATION_REQUIRED")
+        # Simulate ASR failure (e.g. timeout or exception during speech recognition)
+        engine.transcribe_and_spot_keywords = MagicMock(
+            return_value=("", [], "ASR model timeout / inference crash")
+        )
+        engine.analyze_telecom = MagicMock(
+            return_value={"is_blacklisted": False, "is_voip_spoofed": False, "location": "Bengaluru"}
+        )
+        engine.extract_prosodic_dsp = MagicMock(
+            return_value={"rms_energy": 0.05, "zcr": 0.02, "spectral_flatness": 0.01}
+        )
+        engine.run_acoustic_ear = MagicMock(return_value=10.0)
+
+        # 2 seconds of 16kHz sine wave simulating audible speech
+        sr = 16000
+        dummy_audio = (np.sin(2 * np.pi * 440 * np.linspace(0, 2, 2 * sr)) * 0.2).astype(np.float32)
+
+        result = engine.evaluate_live_call(dummy_audio, phone_number="+91-9876543210")
+
+        self.assertEqual(result["status"], "incomplete_analysis")
+        self.assertEqual(result["threat_type"], "UNVERIFIED_TRANSCRIPTION_FAILED")
+        self.assertNotEqual(result["threat_type"], "AUTHENTIC_SAFE_CALL")
+        self.assertEqual(result["circuit_breaker"]["action"], "HOLD_VERIFICATION_REQUIRED")
+        self.assertIn("transcription_error", result)
+        self.assertEqual(result["transcription_error"], "ASR model timeout / inference crash")
+
+    def test_caller_tracker_pseudonymization(self):
+        """Verify caller_tracker uses HMAC-SHA256, masks phone numbers, and keys records by hash."""
+        from backend.engine.caller_tracker import hash_caller_identity, mask_phone, mark_scammer, is_blacklisted, load_blacklist
+        import tempfile
+
+        test_phone = "+919988776655"
+        h = hash_caller_identity(test_phone)
+        self.assertEqual(len(h), 16, "HMAC-SHA256 hash must be 16 hex chars")
+        self.assertEqual(mask_phone(test_phone), "+919****6655")
+
+        # Isolated blacklist file
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+            temp_bl = tf.name
+
+        try:
+            import backend.engine.caller_tracker as ct
+            old_bl = ct.BLACKLIST_PATH
+            ct.BLACKLIST_PATH = temp_bl
+
+            rec = ct.mark_scammer(test_phone, 95.0, "Critical Bank Fraud Scam Demand")
+            self.assertEqual(rec["caller_hash"], h)
+            self.assertEqual(rec["phone_masked"], "+919****6655")
+            self.assertNotIn(test_phone, rec, "Raw phone number must NOT be in persisted record")
+
+            # Verify saved JSON is keyed by hash, not raw phone
+            saved_bl = ct.load_blacklist()
+            self.assertIn(h, saved_bl, "Blacklist must be keyed by caller_hash")
+            self.assertNotIn(test_phone, saved_bl, "Raw phone number must NOT be a top-level key")
+
+            # Verify is_blacklisted resolves via HMAC hash
+            is_bl, bl_data = ct.is_blacklisted(test_phone)
+            self.assertTrue(is_bl)
+            self.assertEqual(bl_data["caller_hash"], h)
+
         finally:
-            core_engine.transcribe_and_spot_keywords = orig_method
+            ct.BLACKLIST_PATH = old_bl
+            if os.path.exists(temp_bl):
+                os.remove(temp_bl)
+
+    def test_banking_unlock_pin_validation(self):
+        """Verify banking circuit breaker requires valid PIN and rejects missing/invalid PIN."""
+        import asyncio
+        from backend.api.banking_hold import unlock_banking, UnlockRequest, state
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+
+        # Set locked state
+        state.locked = True
+
+        # 1. Missing pin must fail Pydantic validation (cannot pass empty {})
+        with self.assertRaises(ValidationError):
+            UnlockRequest()
+
+        # 2. Invalid PIN must raise HTTPException(403)
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                loop.run_until_complete(unlock_banking(UnlockRequest(pin="0000")))
+            self.assertEqual(ctx.exception.status_code, 403)
+            self.assertTrue(state.locked)
+
+            # 3. Correct PIN releases hold
+            res = loop.run_until_complete(unlock_banking(UnlockRequest(pin="1234")))
+            self.assertEqual(res["status"], "ACTIVE")
+            self.assertFalse(state.locked)
+        finally:
+            loop.close()
 
 if __name__ == "__main__":
     unittest.main()
