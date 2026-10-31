@@ -178,7 +178,7 @@ They are served by three endpoints added alongside the existing ones:
 
 * `GET /api/stages?lang=bn` — the five stage keys with localised labels, weights and thresholds, so a client can render the stage strip before the first call arrives.
 * `WS /ws/replay/{preset_id}` — streams a shipped fixture through the **real** pipeline in steps, revealing the transcript as it goes. The staged reveal on the dashboard is actual inference, not a scripted timer.
-* `POST /api/blacklist` and `DELETE /api/blacklist/{phone_number}` — the circuit breaker writes entries automatically at risk ≥ 70, so the delete is how a false positive gets undone.
+* `POST /api/blacklist` and `DELETE /api/blacklist/{phone_number}` — the circuit breaker writes entries automatically at risk ≥ 70, so the delete is how a false positive gets undone. Both **require the control PIN**, sent as the `X-VaniShield-Pin` header: they return `403` without a valid one and `503` when the server has no `VANISHIELD_CONTROL_PIN` configured at all. `GET /api/blacklist` is ungated.
 
 ---
 

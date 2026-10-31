@@ -38,12 +38,13 @@ export default function App() {
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.hostname || '127.0.0.1';
-    const wsUrl = `${protocol}//${host}:8000/ws/live-call`;
+    const isDev = window.location.port === '5173' || window.location.port === '3000';
+    const portPart = isDev ? ':8000' : (window.location.port ? `:${window.location.port}` : '');
+    const wsUrl = `${protocol}//${host}${portPart}/ws/live-call`;
 
     // Synchronize initial banking circuit-breaker status
-    const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
-    const httpProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-    fetch(`${httpProtocol}//${host}:${port}/api/banking/status`)
+    const apiBase = isDev ? `http://${host}:8000` : '';
+    fetch(`${apiBase}/api/banking/status`)
       .then(res => res.json())
       .then(data => {
         const isLocked = Boolean(data.locked);
@@ -113,12 +114,12 @@ export default function App() {
   }, []);
 
   const handleSimulateScam = () => {
+    const isDev = window.location.port === '5173' || window.location.port === '3000';
     const host = window.location.hostname || '127.0.0.1';
-    const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    const apiBase = isDev ? `http://${host}:8000` : '';
 
     // Persist lock state to backend banking server immediately
-    fetch(`${protocol}//${host}:${port}/api/banking/lock`, {
+    fetch(`${apiBase}/api/banking/lock`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -183,10 +184,10 @@ export default function App() {
 
   const handleTransfer = async (payee, amount) => {
     try {
+      const isDev = window.location.port === '5173' || window.location.port === '3000';
       const host = window.location.hostname || '127.0.0.1';
-      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
-      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      const res = await fetch(`${protocol}//${host}:${port}/api/banking/simulate-transfer`, {
+      const apiBase = isDev ? `http://${host}:8000` : '';
+      const res = await fetch(`${apiBase}/api/banking/simulate-transfer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payee, amount: parseFloat(amount) || 0, pin: '1234' })
@@ -204,10 +205,10 @@ export default function App() {
 
   const handleUnlock = async (pin) => {
     try {
+      const isDev = window.location.port === '5173' || window.location.port === '3000';
       const host = window.location.hostname || '127.0.0.1';
-      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
-      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      const res = await fetch(`${protocol}//${host}:${port}/api/banking/unlock`, {
+      const apiBase = isDev ? `http://${host}:8000` : '';
+      const res = await fetch(`${apiBase}/api/banking/unlock`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: pin || '1234' })

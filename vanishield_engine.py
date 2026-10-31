@@ -697,6 +697,10 @@ class VaniShieldCore:
             tmp_file = f"{BLACKLIST_FILE}.tmp"
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
+                # Trailing newline: the circuit breaker rewrites this file
+                # automatically, and without it every rewrite shows up as a
+                # spurious "\ No newline at end of file" diff.
+                f.write("\n")
             os.replace(tmp_file, BLACKLIST_FILE)
             return True
         except Exception as e:
