@@ -921,7 +921,14 @@ def _assemble_frame(result: dict, session, accumulator: "_CallAccumulator") -> d
     frame["unified_risk_score"] = fusion["risk_score"]
     # Re-derive from the accumulated evidence, for the same reason the engine
     # does: a badge that contradicts the score is worse than no badge.
-    frame["threat_type"] = threat_type_from_fusion(fusion, accumulated_stages, call_ema)
+    # The engine's transcription-failed verdict has to survive re-derivation.
+    # a6ab476 fixed the one-shot REST path; this is the streaming one, which
+    # re-derives threat_type from accumulated stages the fusion never saw and
+    # would otherwise hand a live, unreadable call back as safe.
+    if (result.get("threat_type") or "") == "UNVERIFIED_TRANSCRIPTION_FAILED":
+        frame["threat_type"] = "UNVERIFIED_TRANSCRIPTION_FAILED"
+    else:
+        frame["threat_type"] = threat_type_from_fusion(fusion, accumulated_stages, call_ema)
     frame["circuit_breaker"] = {
         "engaged": breaker_engaged,
         "action": "LOCK_BANKING_AND_UPI" if breaker_engaged else "ALLOW_NORMAL_CALL",

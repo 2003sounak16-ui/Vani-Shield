@@ -1810,6 +1810,17 @@ class VaniShieldCore:
         legacy_threat_type = threat_type
         threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob, transcription_failed=transcription_failed)
 
+        # Flooring the score as well as the label. a6ab476 made threat_type
+        # say UNVERIFIED_TRANSCRIPTION_FAILED, but final_risk still came from
+        # the fusion - and with no transcript the fusion sees no stages, so an
+        # unreadable call scored green. The breaker fires on final_risk >= 70,
+        # and the band shown to the user comes from the fusion, so the label
+        # said "unverified" while the number and the colour said "safe".
+        if transcription_failed:
+            final_risk = round(max(final_risk, 45.0 if has_audible_speech else 20.0), 1)
+            fusion["risk_score"] = final_risk
+            fusion["band"] = scam_stages.band_for(final_risk)
+
 
 
         # 7. Circuit Breaker Threshold: strictly derived from final_risk >= 70.0 or blacklisted caller
