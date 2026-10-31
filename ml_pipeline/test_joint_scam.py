@@ -39,15 +39,18 @@ def load_models(model_dir=DEFAULT_CHECKPOINT, head_path=DEFAULT_HEAD):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[*] Initializing Acoustic Model from {model_dir} on {device.upper()}...")
     
+    # Check both root and ml_pipeline checkpoint locations
+    if not os.path.exists(model_dir):
+        alt_ckpt = os.path.join(PROJECT_ROOT, "ml_pipeline", os.path.basename(model_dir))
+        if os.path.exists(alt_ckpt):
+            model_dir = alt_ckpt
+
     if os.path.exists(model_dir):
         w2v_model = AutoModelForAudioClassification.from_pretrained(model_dir).to(device)
         fe = AutoFeatureExtractor.from_pretrained(model_dir)
         w2v_model.eval()
     else:
-        print(f"[!] Warning: {model_dir} not found. Using pretrained facebook/wav2vec2-base fallback.")
-        w2v_model = AutoModelForAudioClassification.from_pretrained("facebook/wav2vec2-base", num_labels=2).to(device)
-        fe = AutoFeatureExtractor.from_pretrained("facebook/wav2vec2-base")
-        w2v_model.eval()
+        raise FileNotFoundError(f"Model checkpoint directory not found at {model_dir}. Base-model fallback disabled to prevent uncalibrated scoring.")
 
     head = None
     if os.path.exists(head_path):
@@ -90,11 +93,20 @@ def analyze_audio_sample(audio_path, w2v_model, fe, head, device):
     else:
         acoustic_score = float(np.median(probs))
 
-    # 2. Heuristic / Simulated Intent Check
-    # (Matches keywords against audio filename or metadata)
-    filename = os.path.basename(audio_path).lower()
-    is_sim_scam = any(k in filename for k in ["scam", "cvv", "otp", "pin", "kyc", "fake"])
-    intent_score = 95.0 if is_sim_scam else 0.5
+    # 2. Content & Intent Risk Analysis (ASR & Keywords / Decision Head)
+    intent_score = 0.5
+    try:
+        from backend.engine.vanishield_engine import core_engine
+        if core_engine is not None:
+            transcript, hits, err = core_engine.transcribe_and_spot_keywords(y)
+            if hits:
+                intent_score = min(99.0, 50.0 + len(hits) * 15.0)
+            elif transcript and transcript.strip():
+                intent_score = 15.0
+    except Exception:
+        # Fallback to decision head or conservative baseline if engine unmounted
+        if head is not None:
+            intent_score = 10.0
 
     # 3. Dual-Brain Unified Risk Fusion
     unified_risk = 0.55 * acoustic_score + 0.45 * intent_score

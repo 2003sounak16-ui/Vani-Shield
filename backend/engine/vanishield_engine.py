@@ -70,7 +70,10 @@ try:
 
     import dotenv
 
-    dotenv.load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    _cur_dir = os.path.dirname(os.path.abspath(__file__))
+    _root_dir = os.path.abspath(os.path.join(_cur_dir, "..", ".."))
+    dotenv.load_dotenv(os.path.join(_root_dir, ".env"))
+    dotenv.load_dotenv(os.path.join(_cur_dir, ".env"))
 
 except Exception:
 
@@ -97,12 +100,7 @@ except Exception:
 # Paths
 
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if os.path.exists(os.path.join(_CURRENT_DIR, "..", "..", "results_master_unified")):
-    PROJECT_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, "..", ".."))
-elif os.path.exists(os.path.join(_CURRENT_DIR, "..", "results_master_unified")):
-    PROJECT_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
-else:
-    PROJECT_ROOT = _CURRENT_DIR
+PROJECT_ROOT = os.path.abspath(os.path.join(_CURRENT_DIR, "..", ".."))
 
 UNIFIED_DIR = os.path.join(PROJECT_ROOT, "results_master_unified")
 
@@ -1479,8 +1477,10 @@ class VaniShieldCore:
 
             try:
 
-                from ephemeral_buffer import hash_caller_identity
-
+                try:
+                    from backend.engine.ephemeral_buffer import hash_caller_identity
+                except ImportError:
+                    from ephemeral_buffer import hash_caller_identity
                 caller_hash = hash_caller_identity(clean_key)
 
             except Exception:

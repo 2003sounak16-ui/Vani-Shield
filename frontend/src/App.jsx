@@ -33,50 +33,100 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef(null);
 
-  // Initialize WebSocket connection to backend
+  // Synchronize initial banking status with backend
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname || '127.0.0.1';
-    const wsUrl = `${protocol}//${host}:8000/ws/live-call`;
-
-    let ws;
-    try {
-      ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setWsConnected(true);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'TELEMETRY_FRAME') {
-            setTelemetry(prev => ({
-              ...prev,
-              ...msg,
-              caller_geo: msg.caller_geo || prev.caller_geo
-            }));
-            if (msg.circuit_breaker_locked) {
-              setBankingState({
-                locked: true,
-                reason: `Fraud Defense: Voice Clone Risk (${msg.unified_risk}%) detected on live call.`,
-                risk_score: msg.unified_risk
-              });
-            }
-          }
-        } catch (e) {
-          console.error('Failed to parse frame:', e);
+    fetch('/api/banking/status')
+      .then(res => res.json())
+      .then(data => {
+        if (data.locked !== undefined) {
+          setBankingState({
+            locked: data.locked,
+            reason: data.reason || (data.locked ? 'Payments Frozen by Fraud Defense' : 'Account Normal'),
+            risk_score: data.risk_score || 0.0
+          });
+          setTelemetry(prev => ({ ...prev, circuit_breaker_locked: data.locked }));
         }
-      };
+      })
+      .catch(() => {});
+  }, []);
 
-      ws.onclose = () => setWsConnected(false);
-      ws.onerror = () => setWsConnected(false);
-    } catch (e) {
-      setWsConnected(false);
-    }
+  // Initialize WebSocket connection to backend with auto-reconnect
+  useEffect(() => {
+    let ws;
+    let reconnectTimer;
+    let isCancelled = false;
+
+    const connectWs = () => {
+      if (isCancelled) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.hostname || '127.0.0.1';
+      const wsUrl = `${protocol}//${host}:8000/ws/live-call`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setWsConnected(true);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'TELEMETRY_FRAME') {
+              setTelemetry(prev => ({
+                ...prev,
+                ...msg,
+                caller_geo: msg.caller_geo || prev.caller_geo
+              }));
+              if (msg.circuit_breaker_locked) {
+                setBankingState({
+                  locked: true,
+                  reason: `Fraud Defense: Voice Clone Risk (${msg.unified_risk}%) detected on live call.`,
+                  risk_score: msg.unified_risk
+                });
+              } else if (msg.circuit_breaker_locked === false) {
+                setBankingState(prev => ({
+                  ...prev,
+                  locked: false,
+                  reason: 'Account Normal'
+                }));
+              }
+            } else if (msg.type === 'SESSION_INIT') {
+              if (msg.circuit_breaker !== undefined) {
+                setBankingState(prev => ({
+                  ...prev,
+                  locked: msg.circuit_breaker
+                }));
+              }
+            }
+          } catch (e) {
+            console.error('Failed to parse frame:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          setWsConnected(false);
+          if (!isCancelled) {
+            reconnectTimer = setTimeout(connectWs, 3000);
+          }
+        };
+        ws.onerror = () => {
+          setWsConnected(false);
+        };
+      } catch (e) {
+        setWsConnected(false);
+        if (!isCancelled) {
+          reconnectTimer = setTimeout(connectWs, 3000);
+        }
+      }
+    };
+
+    connectWs();
 
     return () => {
+      isCancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
   }, []);
@@ -135,13 +185,35 @@ export default function App() {
     }
   };
 
-  const handleUnlock = () => {
+  const handleUnlock = async () => {
+    try {
+      await fetch('/api/banking/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Biometrically authorized user release' })
+      });
+    } catch (e) {
+      console.error('Failed to notify backend unlock:', e);
+    }
     setBankingState({
       locked: false,
       reason: 'Biometrically authorized user release',
       risk_score: 0.0
     });
     setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
+  };
+
+  const handleTransfer = async (payee, amount) => {
+    try {
+      const res = await fetch('/api/banking/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payee, amount: parseFloat(amount) })
+      });
+      return await res.json();
+    } catch (e) {
+      return { success: !bankingState.locked };
+    }
   };
 
   return (
@@ -211,6 +283,7 @@ export default function App() {
           <MockBankingApp
             bankingState={bankingState}
             onUnlock={handleUnlock}
+            onTransfer={handleTransfer}
           />
         </div>
       </main>

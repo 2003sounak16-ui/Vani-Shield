@@ -143,26 +143,24 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertEqual(data["b"].shape, (2,))
 
     def test_transcription_failure_status(self):
-        """Verify that when transcription fails, the verdict is incomplete_analysis rather than safe."""
-        transcription_err = "ASR model timeout"
-        known_transcript = None
-        transcription_failed = bool(transcription_err and not known_transcript)
-        analysis_status = "incomplete_analysis" if transcription_failed else "success"
-        w2v_p = 0.0
-        has_audible_speech = False
+        """Verify that when transcription fails, the actual engine produces incomplete_analysis and HOLD action."""
+        try:
+            from backend.engine.vanishield_engine import core_engine
+        except ImportError:
+            from vanishield_engine import core_engine
 
-        if transcription_failed:
-            final_risk = round(max(w2v_p, 45.0 if has_audible_speech else 20.0), 1)
-            threat_type = "UNVERIFIED_TRANSCRIPTION_FAILED"
-        else:
-            threat_type = "AUTHENTIC_SAFE_CALL"
+        # Mock transcribe_and_spot_keywords on core_engine
+        orig_method = core_engine.transcribe_and_spot_keywords
+        try:
+            core_engine.transcribe_and_spot_keywords = lambda *args, **kwargs: ("", [], "ASR model timeout")
+            dummy_audio = (np.sin(np.linspace(0, 100, 16000)) * 0.1).astype(np.float32)
+            result = core_engine.evaluate_live_call(dummy_audio, phone_number="+919876543210")
 
-        cb_action = "HOLD_VERIFICATION_REQUIRED" if transcription_failed else "ALLOW_NORMAL_CALL"
-
-        self.assertEqual(analysis_status, "incomplete_analysis")
-        self.assertEqual(threat_type, "UNVERIFIED_TRANSCRIPTION_FAILED")
-        self.assertNotEqual(threat_type, "AUTHENTIC_SAFE_CALL")
-        self.assertEqual(cb_action, "HOLD_VERIFICATION_REQUIRED")
+            self.assertEqual(result.get("status"), "incomplete_analysis")
+            self.assertEqual(result.get("threat_type"), "UNVERIFIED_TRANSCRIPTION_FAILED")
+            self.assertEqual(result.get("circuit_breaker", {}).get("action"), "HOLD_VERIFICATION_REQUIRED")
+        finally:
+            core_engine.transcribe_and_spot_keywords = orig_method
 
 if __name__ == "__main__":
     unittest.main()

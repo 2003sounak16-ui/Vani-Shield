@@ -124,5 +124,18 @@ class EphemeralRAMBuffer:
                 del self.buffers[session_id]
             self.last_activity.pop(session_id, None)
 
+    def get_buffer_duration(self, session_id: str) -> float:
+        """Returns the total duration in seconds of buffered PCM in memory for the given session."""
+        with self._lock:
+            q = self.buffers.get(session_id)
+            if not q:
+                return 0.0
+            total_samples = sum(len(item[1]) for item in q)
+            return float(total_samples) / float(self.sample_rate)
+
+    def clear_session(self, session_id: str):
+        """Alias for purge_session to wipe volatile RAM for session."""
+        self.purge_session(session_id)
+
 # Singleton instance
 ram_ring_buffer = EphemeralRAMBuffer(max_duration_sec=3.5, sample_rate=16000)

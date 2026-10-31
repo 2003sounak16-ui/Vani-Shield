@@ -45,7 +45,19 @@ async def websocket_live_call(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_text()
+            message = await websocket.receive()
+            if "bytes" in message and message["bytes"]:
+                ephemeral_buffer.push_chunk(session_id, message["bytes"])
+                await websocket.send_text(json.dumps({
+                    "type": "CHUNK_ACK",
+                    "session_id": session_id,
+                    "buffered_seconds": ephemeral_buffer.get_buffer_duration(session_id)
+                }))
+                continue
+
+            data = message.get("text", "")
+            if not data:
+                continue
             msg = json.loads(data)
             action = msg.get("action")
 
@@ -62,7 +74,7 @@ async def websocket_live_call(websocket: WebSocket):
                         banking_state.locked = True
                         banking_state.risk_score = sc["risk"]
                         banking_state.reason = f"Automated Defense: High Risk Voice Clone ({sc['risk']}%) detected on live call."
-                        mark_scammer(caller_num, sc["risk"], sc["text"])
+                        await asyncio.to_thread(mark_scammer, caller_num, sc["risk"], sc["text"])
 
                     payload = {
                         "type": "TELEMETRY_FRAME",
@@ -126,6 +138,6 @@ async def websocket_live_call(websocket: WebSocket):
                 }))
 
     except WebSocketDisconnect:
-        ephemeral_buffer.clear_session(session_id)
+        ephemeral_buffer.purge_session(session_id)
     except Exception as e:
-        ephemeral_buffer.clear_session(session_id)
+        ephemeral_buffer.purge_session(session_id)

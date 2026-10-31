@@ -52,6 +52,7 @@ def main():
                 path = alt_path
             else:
                 print(f"[!] Warning: Test file {item['name']} not found.")
+                all_passed = False
                 continue
 
         t0 = time.perf_counter()
@@ -94,9 +95,12 @@ def main():
     print("\n" + "=" * 75)
     if all_passed:
         print("[SUCCESS] All unseen generalization evaluation tests PASSED successfully.")
+        print("=" * 75 + "\n")
+        sys.exit(0)
     else:
-        print("[NOTICE] Generalization tests completed with calibration adjustments required.")
-    print("=" * 75 + "\n")
+        print("[ERROR] Generalization tests failed or missing evaluation fixtures.")
+        print("=" * 75 + "\n")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

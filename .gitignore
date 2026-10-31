@@ -22,7 +22,9 @@ node_modules/
 dist/
 .vite/
 
-# IDE / Editor configuration
+# Local Artifacts & Graph Tools
+graphify-out/
+dump_comments.py
 .vscode/
 .idea/
 *.swp

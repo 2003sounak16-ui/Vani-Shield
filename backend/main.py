@@ -40,6 +40,16 @@ app.add_middleware(
 app.include_router(ws_router)
 app.include_router(banking_router)
 
+# Mount audio evaluation, simulation, and speech routes from backend.app_demo
+try:
+    from backend.app_demo import app as demo_app
+    existing_paths = {r.path for r in app.routes}
+    for r in demo_app.routes:
+        if r.path not in existing_paths and r.path not in ["/openapi.json", "/docs", "/redoc"]:
+            app.routes.append(r)
+except Exception:
+    pass
+
 @app.get("/health")
 async def health_check():
     """System health check and GPU acceleration status."""

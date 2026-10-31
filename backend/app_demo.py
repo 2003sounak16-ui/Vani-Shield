@@ -901,13 +901,13 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
+    cleaned_text = req.text.strip()
+    if not cleaned_text:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    if len(cleaned_text) > 500:
+        raise HTTPException(status_code=400, detail="Text length exceeds maximum allowed limit of 500 characters.")
 
-
-
-    audio_bytes, meta, err = synthesize_with_fallback(text=req.text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+    audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
 
     if err and not audio_bytes:
 
@@ -943,13 +943,13 @@ async def tts_simulate_attack(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
+    cleaned_text = req.text.strip()
+    if not cleaned_text:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    if len(cleaned_text) > 500:
+        raise HTTPException(status_code=400, detail="Text length exceeds maximum allowed limit of 500 characters.")
 
-
-
-    audio_bytes, meta, err = synthesize_with_fallback(text=req.text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
+    audio_bytes, meta, err = await asyncio.to_thread(synthesize_with_fallback, text=cleaned_text, voice_id=req.voice_id or "21m00Tcm4TlvDq8ikWAM")
 
     if err and not audio_bytes:
 

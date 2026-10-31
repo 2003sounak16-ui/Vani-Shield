@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { MapPin, Globe, Shield } from 'lucide-react';
+import L from 'leaflet';
 
 export default function ScammerMap({ callerGeo, blacklist }) {
   const mapContainerRef = useRef(null);
@@ -8,12 +9,12 @@ export default function ScammerMap({ callerGeo, blacklist }) {
 
   useEffect(() => {
     // Dynamically initialize Leaflet map
-    if (typeof window !== 'undefined' && window.L && mapContainerRef.current) {
+    if (typeof window !== 'undefined' && mapContainerRef.current) {
       if (!mapInstanceRef.current) {
         const lat = callerGeo?.lat || 28.6139;
         const lon = callerGeo?.lon || 77.2090;
 
-        const map = window.L.map(mapContainerRef.current, {
+        const map = L.map(mapContainerRef.current, {
           center: [lat, lon],
           zoom: 5,
           zoomControl: false,
@@ -21,7 +22,7 @@ export default function ScammerMap({ callerGeo, blacklist }) {
         });
 
         // Dark theme map tiles
-        window.L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
           maxZoom: 19,
           subdomains: 'abcd',
         }).addTo(map);
@@ -39,7 +40,7 @@ export default function ScammerMap({ callerGeo, blacklist }) {
   }, []);
 
   useEffect(() => {
-    if (mapInstanceRef.current && window.L && callerGeo) {
+    if (mapInstanceRef.current && callerGeo) {
       const lat = callerGeo.lat || 28.6139;
       const lon = callerGeo.lon || 77.2090;
       const isScam = callerGeo.is_scam;
@@ -56,14 +57,14 @@ export default function ScammerMap({ callerGeo, blacklist }) {
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
       </div>`;
 
-      const customIcon = window.L.divIcon({
+      const customIcon = L.divIcon({
         className: 'custom-pin',
         html: iconHtml,
         iconSize: [24, 24],
         iconAnchor: [12, 24]
       });
 
-      markerRef.current = window.L.marker([lat, lon], { icon: customIcon })
+      markerRef.current = L.marker([lat, lon], { icon: customIcon })
         .addTo(mapInstanceRef.current)
         .bindPopup(`
           <div style="font-family: sans-serif; font-size: 12px; color: #111;">
