@@ -7,8 +7,15 @@ import glob
 import numpy as np
 import torch
 import torchaudio
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
-from predict import load_audio
+try:
+    from ml_pipeline.predict import load_audio
+except ImportError:
+    from predict import load_audio
 
 BENCHMARK_SAMPLES = [
     ("Real: User Voice (Sounak)", r"C:\AI\VoiceCloning\user_test_voice_16k.wav", 0),

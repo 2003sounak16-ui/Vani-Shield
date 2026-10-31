@@ -1,2 +1,0 @@
-﻿# VANISHIELD AI — VOICE CLONING KNOWLEDGE BASE & AI HANDOVER
-(See full markdown text above)

@@ -10,9 +10,13 @@ import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 try:
     import dotenv
-    dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    dotenv.load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 except Exception:
     pass
 

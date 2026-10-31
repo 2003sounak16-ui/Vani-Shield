@@ -6,12 +6,19 @@ import pandas as pd
 import time
 
 # Ensure repo root is on sys.path
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
-from build_robust_manifest import make_split
+try:
+    from backend.engine.ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
+except ImportError:
+    from ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
+
+try:
+    from ml_pipeline.build_robust_manifest import make_split
+except ImportError:
+    from build_robust_manifest import make_split
 
 class TestVaniShieldFixes(unittest.TestCase):
 
