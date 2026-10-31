@@ -160,13 +160,11 @@ async def startup_check():
 
     if core_engine is None:
 
-        logger.critical("FATAL: VaniShield Core failed to initialize because no trained Wav2Vec 2.0 checkpoint was found.")
+        logger.warning(
 
-        raise RuntimeError(
+            "VaniShield Core running in degraded serverless/edge mode (no local Wav2Vec 2.0 checkpoint found). "
 
-            "VaniShield AI server cannot start without trained checkpoint weights. "
-
-            "Please provide a fine-tuned model checkpoint directory containing config.json."
+            "Audio classification will use edge heuristics."
 
         )
 
