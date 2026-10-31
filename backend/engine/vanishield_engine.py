@@ -71,7 +71,10 @@ else:
     W2V_CHECKPOINT = None
 
 UNIFIED_MODEL_PT = os.environ.get("VANISHIELD_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_wav2vec_model.pt"))
-HEAD_NPZ = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz"))
+HEAD_NPZ_DEFAULT = os.path.join(PROJECT_ROOT, "ml_pipeline", "checkpoints", "voice-decision-head-f32.npz")
+if not os.path.exists(HEAD_NPZ_DEFAULT):
+    HEAD_NPZ_DEFAULT = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
+HEAD_NPZ = os.environ.get("VANISHIELD_HEAD_NPZ", HEAD_NPZ_DEFAULT)
 BLACKLIST_FILE = os.environ.get("VANISHIELD_BLACKLIST_PATH", os.path.join(PROJECT_ROOT, "scammer_blacklist.json"))
 JEV_SERVER_URL = os.environ.get("VANISHIELD_JEV_URL", "http://127.0.0.1:9931")
 

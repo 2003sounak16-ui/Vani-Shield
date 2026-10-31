@@ -123,7 +123,9 @@ class TestVaniShieldFixes(unittest.TestCase):
 
     def test_decision_head_file_integrity(self):
         """Verify voice-decision-head-f32.npz exists and has valid shapes for W, b, mu, sd."""
-        head_path = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
+        head_path = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "ml_pipeline", "checkpoints", "voice-decision-head-f32.npz"))
+        if not os.path.exists(head_path):
+            head_path = os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz")
         self.assertTrue(os.path.exists(head_path), "voice-decision-head-f32.npz must exist")
         data = np.load(head_path)
         self.assertIn("W", data)
