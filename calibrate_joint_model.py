@@ -1,4 +1,4 @@
-﻿import os
+import os
 import glob
 import time
 import subprocess
@@ -16,7 +16,8 @@ SERVER_URL = "http://127.0.0.1:9931"
 LLAMA_EXE = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\llama-server.exe")
 GGUF_MODEL = r"C:\AI\Models\Jev-Omni\Jev-Omni-Unified-Q4_K_M.gguf"
 MMPROJ_MODEL = r"C:\AI\Models\Jev-Omni\mmproj-jev-omni.gguf"
-MODEL_PT = r"C:\AI\VoiceCloning\unified_jev_wav2vec_model.pt"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+MODEL_PT = os.environ.get("VANISHIELD_CALIBRATED_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_wav2vec_base_calibrated.pt"))
 
 class UnifiedJevOmniVoiceNet(nn.Module):
     def __init__(self, jev_dim=3840, w2v_model_name="facebook/wav2vec2-base"):

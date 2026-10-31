@@ -27,10 +27,11 @@ SERVER_URL = "http://127.0.0.1:9931"
 LLAMA_EXE = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\llama-server.exe")
 GGUF_MODEL = r"C:\AI\Models\Jev-Omni\Jev-Omni-Unified-Q4_K_M.gguf"
 MMPROJ_MODEL = r"C:\AI\Models\Jev-Omni\mmproj-jev-omni.gguf"
-MODEL_PT = r"C:\AI\VoiceCloning\unified_jev_wav2vec_model.pt"
-HEAD_NPZ = r"C:\AI\VoiceCloning\voice-decision-head-f32.npz"
-BLACKLIST_FILE = r"C:\AI\VoiceCloning\scammer_blacklist.json"
-W2V_DIR = r"C:\AI\VoiceCloning\results_kaggle_all"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+MODEL_PT = os.environ.get("VANISHIELD_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_wav2vec_model.pt"))
+HEAD_NPZ = os.environ.get("VANISHIELD_HEAD_NPZ", os.path.join(PROJECT_ROOT, "voice-decision-head-f32.npz"))
+BLACKLIST_FILE = os.environ.get("VANISHIELD_TEST_BLACKLIST", os.path.join(PROJECT_ROOT, "test_scammer_blacklist.json"))
+W2V_DIR = os.environ.get("VANISHIELD_W2V_DIR", os.path.join(PROJECT_ROOT, "results_kaggle_all"))
 
 class UnifiedMultilingualVoiceNet(nn.Module):
     def __init__(self, jev_dim=3840, w2v_model_path=W2V_DIR):
@@ -194,12 +195,12 @@ def main():
         blacklist = {}
         if os.path.exists(BLACKLIST_FILE):
             try:
-                with open(BLACKLIST_FILE, "r") as f:
+                with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
                     raw_bl = json.load(f)
                     if isinstance(raw_bl, dict):
                         blacklist = raw_bl
-            except Exception:
-                blacklist = {}
+            except Exception as e:
+                raise RuntimeError(f"Refusing to overwrite unreadable blacklist: {BLACKLIST_FILE}: {e}")
 
         cuda_latencies = []
         all_passed = True
@@ -268,8 +269,11 @@ def main():
                 print(f"DEFENSE STATUS    : [GREEN SAFE] Normal Call — Banking & UPI Apps Unlocked.")
             print(f"Detection Result  : {'CORRECT' if correct_detection else 'MISMATCH'}")
 
-        with open(BLACKLIST_FILE, "w") as f:
-            json.dump(blacklist, f, indent=2)
+        os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
+        tmp_bl = f"{BLACKLIST_FILE}.tmp"
+        with open(tmp_bl, "w", encoding="utf-8") as f:
+            json.dump(blacklist, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_bl, BLACKLIST_FILE)
 
         avg_cuda_latency = np.mean(cuda_latencies)
         passed_count = sum(1 for c in calls if (c['is_scam'] == (c['is_scam'] and all_passed)))

@@ -1,4 +1,4 @@
-﻿import os
+import os
 import glob
 import time
 import subprocess
@@ -9,6 +9,7 @@ import torch.nn as nn
 import torchaudio
 from transformers import AutoFeatureExtractor, Wav2Vec2Model
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 SERVER_URL = "http://127.0.0.1:9931"
 LLAMA_EXE = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe\llama-server.exe")
 GGUF_MODEL = r"C:\AI\Models\Jev-Omni\Jev-Omni-Unified-Q4_K_M.gguf"
@@ -133,18 +134,20 @@ def main():
             acc = (preds == y).float().mean().item() * 100
             print(f"  Epoch {epoch}/5 | Joint Loss: {loss.item():.4f} | Joint Accuracy: {acc:.1f}%")
 
-        # Save Joint Checkpoint + Jev-Omni .npz Decision Head
-        torch.save(model.state_dict(), "unified_jev_wav2vec_model.pt")
+        # Save Joint Checkpoint + Jev-Omni .npz Decision Head to distinct paths
+        model_out = os.environ.get("VANISHIELD_JOINT_MODEL_PT", os.path.join(PROJECT_ROOT, "unified_jev_omni_model.pt"))
+        head_out = os.environ.get("VANISHIELD_JOINT_HEAD_NPZ", os.path.join(PROJECT_ROOT, "jev-omni-decision-head-f32.npz"))
+        torch.save(model.state_dict(), model_out)
         mu = X_jev.mean(dim=0).detach().cpu().numpy()
         sd = (X_jev.std(dim=0).detach().cpu().numpy()) + 1e-6
         np.savez(
-            "voice-decision-head-f32.npz",
+            head_out,
             mu=mu, sd=sd,
             W=model.jev_head.weight.detach().cpu().numpy(),
             b=model.jev_head.bias.detach().cpu().numpy()
         )
-        print("\n[SUCCESS] Saved unified model -> C:\\AI\\VoiceCloning\\unified_jev_wav2vec_model.pt")
-        print("[SUCCESS] Saved Jev-Omni head -> C:\\AI\\VoiceCloning\\voice-decision-head-f32.npz")
+        print(f"\n[SUCCESS] Saved unified model -> {model_out}")
+        print(f"[SUCCESS] Saved Jev-Omni head -> {head_out}")
 
     finally:
         if proc is not None:

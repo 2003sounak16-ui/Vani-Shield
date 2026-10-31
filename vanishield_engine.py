@@ -13,6 +13,7 @@ import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import logging
+import threading
 import re
 import json
 import time
@@ -28,6 +29,7 @@ from transformers import AutoFeatureExtractor, Wav2Vec2ForSequenceClassification
 import faiss
 
 logger = logging.getLogger("vanishield_engine")
+_blacklist_lock = threading.Lock()
 
 # Load environment variables (.env) if present
 try:
@@ -670,21 +672,32 @@ class VaniShieldCore:
             or (len(clean_key) < 10)
         )
         if circuit_breaker_active and not is_generic_upload and clean_key.startswith("+91"):
-            threat_reason = f"{threat_type}: {transcript or 'AI voice clone / vishing attack'}"
-            self.blacklist[clean_key] = {
-                "location": telecom["location"],
-                "carrier": telecom["carrier"],
+            threat_reason = f"{threat_type}: Voice clone / financial vishing threat detected"
+            try:
+                from ephemeral_buffer import hash_caller_identity
+                caller_hash = hash_caller_identity(clean_key)
+            except Exception:
+                caller_hash = "ANONYMIZED_CALLER"
+
+            entry = {
+                "caller_hash": caller_hash,
+                "location": telecom.get("location", "Unknown"),
+                "carrier": telecom.get("carrier", "Unknown"),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "risk_score": final_risk,
                 "reason": threat_reason,
                 "action": "BANKING_AND_UPI_LOCKED"
             }
-            try:
-                os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
-                with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logger.error(f"Failed to update scammer blacklist at {BLACKLIST_FILE}: {e}")
+            with _blacklist_lock:
+                self.blacklist[clean_key] = entry
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
+                    tmp_file = f"{BLACKLIST_FILE}.tmp"
+                    with open(tmp_file, "w", encoding="utf-8") as f:
+                        json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
+                    os.replace(tmp_file, BLACKLIST_FILE)
+                except Exception as e:
+                    logger.error(f"Failed to atomically update scammer blacklist at {BLACKLIST_FILE}: {e}")
 
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 

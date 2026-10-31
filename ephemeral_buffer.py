@@ -7,13 +7,16 @@ DPDP Act (Digital Personal Data Protection Act 2023) Compliant:
 4. Keyed HMAC-SHA256 hashing for caller identity & audit logs.
 """
 
+import os
 import time
 import hmac
 import hashlib
 from collections import defaultdict, deque
 import numpy as np
 
-HMAC_SECRET = b"vanishield_dpdp_secret_salt_2026"
+# Load HMAC key from environment variable; fallback to configured salt if not set
+_secret_env = os.environ.get("VANISHIELD_HMAC_SECRET", "vanishield_dpdp_secret_salt_2026")
+HMAC_SECRET = _secret_env.encode("utf-8") if isinstance(_secret_env, str) else _secret_env
 
 def hash_caller_identity(phone_number: str) -> str:
     """Produces an irreversible, anonymized audit hash for phone numbers."""

@@ -51,7 +51,11 @@ def load_audio_robust(path, target_sr=16000):
 
 class UnifiedAudioDataset(torch.utils.data.Dataset):
     def __init__(self, df, feature_extractor, max_duration=3.0, target_sr=16000, augment=False):
-        self.df = df.reset_index(drop=True)
+        # Filter out missing audio files so non-existent paths don't become labeled silence
+        missing = ~df["path"].map(os.path.exists)
+        if missing.any():
+            print(f"[WARN] Dropping {int(missing.sum())} rows with missing audio files")
+        self.df = df[~missing].reset_index(drop=True)
         self.feature_extractor = feature_extractor
         self.target_sr = target_sr
         self.max_samples = int(max_duration * target_sr)
@@ -102,16 +106,23 @@ def main():
     print(f"Device: {torch.cuda.get_device_name(0)}")
     print("=" * 70)
 
-    manifest_path = r"C:\AI\VoiceCloning\master_unified_dataset_manifest.csv"
-    output_dir = r"C:\AI\VoiceCloning\results_master_unified"
-    base_model = r"C:\AI\VoiceCloning\results_master_balanced"
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    manifest_path = os.environ.get("VANISHIELD_UNIFIED_MANIFEST", os.path.join(project_root, "master_unified_dataset_manifest.csv"))
+    if not os.path.exists(manifest_path):
+        manifest_path = os.path.join(project_root, "master_unified_manifest.csv")
+    output_dir = os.environ.get("VANISHIELD_OUTPUT_DIR", os.path.join(project_root, "results_master_unified"))
+    base_model = os.environ.get("VANISHIELD_BASE_MODEL", os.path.join(project_root, "results_master_balanced"))
 
     df = pd.read_csv(manifest_path)
     print(f"Dataset total samples: {len(df)}")
     print(f"Base model checkpoint: {base_model}")
     print(f"Output directory: {output_dir}")
 
-    train_df, val_df = train_test_split(df, test_size=0.20, random_state=42, stratify=df["label"])
+    # Split unique audio paths to prevent identical recordings leaking across train and val
+    uniq = df.drop_duplicates("path")[["path", "label"]]
+    train_paths, val_paths = train_test_split(uniq, test_size=0.20, random_state=42, stratify=uniq["label"])
+    train_df = df[df["path"].isin(train_paths["path"])]
+    val_df = df[df["path"].isin(val_paths["path"])].drop_duplicates("path")
     print(f"Train split: {len(train_df)}, Validation split: {len(val_df)}")
 
     fe = AutoFeatureExtractor.from_pretrained(base_model)
