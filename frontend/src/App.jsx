@@ -69,13 +69,22 @@ export default function App() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'SESSION_INIT') {
-            if (msg.circuit_breaker) {
+            const isLocked = Boolean(msg.circuit_breaker || msg.circuit_breaker_locked || msg.locked);
+            if (isLocked) {
               setBankingState(prev => ({
                 ...prev,
                 locked: true,
-                reason: 'Account Protection: Previous high-risk scam triggered circuit breaker.'
+                reason: msg.reason || 'Account Protection: Previous high-risk scam triggered circuit breaker.',
+                risk_score: msg.risk_score || 95.0
               }));
               setTelemetry(prev => ({ ...prev, circuit_breaker_locked: true }));
+            } else {
+              setBankingState(prev => ({
+                ...prev,
+                locked: false,
+                reason: 'Account Normal'
+              }));
+              setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
             }
           } else if (msg.type === 'TELEMETRY_FRAME') {
             setTelemetry(prev => ({
@@ -209,18 +218,8 @@ export default function App() {
         return false;
       }
     } catch (err) {
-      if (pin === '1234') {
-        setBankingState({
-          locked: false,
-          reason: 'Biometrically authorized user release (local fallback)',
-          risk_score: 0.0
-        });
-        setTelemetry(prev => ({ ...prev, circuit_breaker_locked: false }));
-        return true;
-      } else {
-        alert('Invalid Security PIN. Default test PIN is 1234.');
-        return false;
-      }
+      alert('Unable to reach banking server to release hold. Please check backend connection.');
+      return false;
     }
   };
 

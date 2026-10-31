@@ -271,5 +271,60 @@ class TestVaniShieldFixes(unittest.TestCase):
         finally:
             loop.close()
 
+
+    def test_tts_authorization_and_transfer_lock(self):
+        """Verify TTS routes require authorization when configured and transfer is blocked when locked."""
+        import asyncio
+        from fastapi import HTTPException
+        from backend.api.evaluate import check_tts_access, check_tts_budget_and_length
+        from backend.api.banking_hold import simulate_transfer, TransferRequest, state
+
+        class MockRequest:
+            def __init__(self, headers=None, host="127.0.0.1"):
+                self.headers = headers or {}
+                self.client = type("Client", (), {"host": host})()
+
+        # 1. Test TTS authorization enforcement
+        old_token = os.environ.get("TTS_ACCESS_TOKEN")
+        try:
+            os.environ["TTS_ACCESS_TOKEN"] = "secure-secret-token"
+            req_no_auth = MockRequest()
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_access(req_no_auth)
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            req_wrong = MockRequest({"X-TTS-Token": "wrong-token"})
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_access(req_wrong)
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            req_valid = MockRequest({"X-TTS-Token": "secure-secret-token"})
+            check_tts_access(req_valid)
+
+            check_tts_access(req_no_auth, body_token="secure-secret-token")
+
+            with self.assertRaises(HTTPException) as ctx:
+                check_tts_budget_and_length("a" * 501, req_valid)
+            self.assertEqual(ctx.exception.status_code, 400)
+        finally:
+            if old_token is not None:
+                os.environ["TTS_ACCESS_TOKEN"] = old_token
+            else:
+                os.environ.pop("TTS_ACCESS_TOKEN", None)
+
+        # 2. Test transfer lock enforcement
+        state.locked = True
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                loop.run_until_complete(simulate_transfer(TransferRequest(payee="Electricity", amount=1500.0)))
+            self.assertEqual(ctx.exception.status_code, 423)
+
+            state.locked = False
+            tx_res = loop.run_until_complete(simulate_transfer(TransferRequest(payee="Electricity", amount=1500.0)))
+            self.assertTrue(tx_res["success"])
+        finally:
+            loop.close()
+
 if __name__ == "__main__":
     unittest.main()

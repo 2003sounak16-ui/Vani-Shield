@@ -196,6 +196,10 @@
           <button type="button" onclick="setTtsPrompt('bn')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700">Prompt: BN Trap</button>
         </div>
 
+        <div class="mt-2 mb-1">
+          <label class="text-[10px] text-slate-400 block mb-0.5">Authorization Token (X-TTS-Token):</label>
+          <input id="tts-token-input" type="password" placeholder="Access Token (X-TTS-Token if configured, default: 1234)" class="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono" />
+        </div>
         <button id="tts-synthesize-btn" onclick="generateAndAnalyzeWithElevenLabs()" class="w-full py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg font-bold text-xs shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition">
           <i class="fa-solid fa-play"></i> Synthesize with ElevenLabs & Test Shield
         </button>
@@ -778,17 +782,34 @@
       document.getElementById("call-status-badge").className = "px-2.5 py-0.5 rounded text-xs font-semibold bg-purple-950 text-purple-300 border border-purple-800 animate-pulse";
 
       try {
+        const token = (document.getElementById("tts-token-input")?.value || localStorage.getItem("VANISHIELD_TTS_TOKEN") || "").trim();
+        const headers = { "Content-Type": "application/json" };
+        if (token) {
+          headers["X-TTS-Token"] = token;
+          try { localStorage.setItem("VANISHIELD_TTS_TOKEN", token); } catch (e) {}
+        }
+
         const response = await fetch("/api/tts/simulate-attack", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify({
             text: text,
             voice_id: voiceId,
+            access_token: token,
             phone_number: "+91-1409988776 (ElevenLabs Synthesized Clone)"
           })
         });
 
         if (!response.ok) {
+          if (response.status === 401) {
+            const err = await response.json();
+            const tokenInput = document.getElementById("tts-token-input");
+            if (tokenInput) {
+              tokenInput.focus();
+              tokenInput.classList.add("border-red-500");
+            }
+            throw new Error(err.detail || "Authentication required: Please provide a valid X-TTS-Token.");
+          }
           const err = await response.json();
           throw new Error(err.detail || "Synthesis failed");
         }

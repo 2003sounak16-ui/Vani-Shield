@@ -1,3 +1,7 @@
+try:
+    from backend.api.banking_hold import router as banking_router, state as banking_state
+except ImportError:
+    from api.banking_hold import router as banking_router, state as banking_state
 """
 
 VaniShield AI — Production FastAPI Server & Real-Time Threat Intelligence Engine
@@ -138,6 +142,8 @@ app = FastAPI(
     version="2.0.0"
 
 )
+app.include_router(banking_router)
+
 
 
 
@@ -677,8 +683,6 @@ async def live_call_websocket(websocket: WebSocket):
 
     # Isolated caller identity per connection (Issue #3)
 
-    # Default to an inbound caller identity specific to this session, allowing client overrides
-
     caller_phone = (
 
         websocket.query_params.get("phone")
@@ -688,6 +692,21 @@ async def live_call_websocket(websocket: WebSocket):
         or f"+91-0000000000 (Live Call {session_id[-6:]})"
 
     )
+
+    # Send initial SESSION_INIT handshake frame carrying circuit breaker state
+    try:
+        await websocket.send_text(json.dumps({
+            "type": "SESSION_INIT",
+            "session_id": session_id,
+            "caller": {
+                "number": caller_phone,
+                "carrier": "VoIP / Cellular Gateway",
+                "location": "National / Metro Node"
+            },
+            "circuit_breaker": banking_state.locked
+        }))
+    except Exception as e:
+        logger.warning(f"Failed to send SESSION_INIT: {e}")
 
 
 
@@ -759,7 +778,48 @@ async def live_call_websocket(websocket: WebSocket):
 
                 action = data.get("action")
 
-                if action == "SET_CALLER":
+                if action == "SIMULATE_SCAM_CALL":
+                    banking_state.locked = True
+                    banking_state.risk_score = 97.9
+                    banking_state.reason = "Automated Defense: High-Risk AI Voice Clone & Financial Vishing Attack Intercepted."
+                    await websocket.send_json({
+                        "type": "TELEMETRY_FRAME",
+                        "session_id": session_id,
+                        "acoustic_clone": 99.4,
+                        "intent_scam": 96.0,
+                        "unified_risk": 97.9,
+                        "threat_level": "CRITICAL SCAM (LOCKED)",
+                        "circuit_breaker_locked": True,
+                        "transcript": "Urgent security notice from State Bank of India fraud team. Share your 6-digit OTP and CVV immediately to block illegal debit.",
+                        "caller_geo": {
+                            "number": caller_phone,
+                            "carrier": "Virtual VoIP Gateway (Flagged)",
+                            "city": "Jamtara / Cyber Node",
+                            "lat": 23.9632,
+                            "lon": 86.8029,
+                            "is_scam": True
+                        }
+                    })
+                elif action == "SIMULATE_SAFE_CALL":
+                    await websocket.send_json({
+                        "type": "TELEMETRY_FRAME",
+                        "session_id": session_id,
+                        "acoustic_clone": 0.2,
+                        "intent_scam": 0.0,
+                        "unified_risk": 0.1,
+                        "threat_level": "AUTHENTIC (SAFE)",
+                        "circuit_breaker_locked": banking_state.locked,
+                        "transcript": "Hi Rahul, are we still meeting for lunch today at 1 PM? Let me know when you reach.",
+                        "caller_geo": {
+                            "number": caller_phone,
+                            "carrier": "Reliance Jio Infocomm",
+                            "city": "Bengaluru Circle",
+                            "lat": 12.9716,
+                            "lon": 77.5946,
+                            "is_scam": False
+                        }
+                    })
+                elif action == "SET_CALLER":
 
                     new_phone = data.get("phone") or data.get("caller_id")
 
@@ -851,6 +911,8 @@ class SynthesizeRequest(BaseModel):
 
     use_known_transcript: Optional[bool] = False
 
+    access_token: Optional[str] = None
+
 
 
 @app.get("/api/stt/status")
@@ -881,13 +943,29 @@ MAX_TTS_PER_MINUTE = 10          # global cap: calls per minute
 MAX_TTS_PER_IP_PER_MINUTE = 5   # per-source-IP cap: calls per minute
 
 
-def _check_tts_access(request: Request) -> None:
-    """Verify X-TTS-Token header matches TTS_ACCESS_TOKEN env var when configured."""
+def _check_tts_access(request: Request, body_token: Optional[str] = None) -> None:
+    """Verify authorization before allowing speech synthesis via paid ElevenLabs quota."""
+    try:
+        from elevenlabs_tts import is_elevenlabs_available
+        has_elevenlabs = is_elevenlabs_available()
+    except Exception:
+        has_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY"))
+
     expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+    if has_elevenlabs and not expected:
+        expected = os.environ.get("VANISHIELD_API_KEY", os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))).strip()
+
     if expected:
-        provided = (request.headers.get("X-TTS-Token") or "").strip()
+        provided = (
+            request.headers.get("X-TTS-Token")
+            or request.headers.get("Authorization", "").replace("Bearer ", "")
+            or (body_token or "")
+        ).strip()
         if not provided or not hmac.compare_digest(provided, expected):
-            raise HTTPException(status_code=401, detail="TTS endpoint requires a valid X-TTS-Token header.")
+            raise HTTPException(
+                status_code=401,
+                detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
+            )
 
 
 def _check_tts_budget_and_length(text: str, request: Request = None) -> None:
@@ -957,7 +1035,7 @@ async def tts_synthesize(req: SynthesizeRequest, request: Request):
 
 
 
-    _check_tts_access(request)
+    _check_tts_access(request, req.access_token)
 
 
 
@@ -1004,7 +1082,7 @@ async def tts_simulate_attack(req: SynthesizeRequest, request: Request):
 
 
 
-    _check_tts_access(request)
+    _check_tts_access(request, req.access_token)
 
 
 

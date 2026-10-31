@@ -8,6 +8,7 @@ import os
 import sys
 import io
 import time
+import hmac
 import json
 import base64
 import asyncio
@@ -70,9 +71,36 @@ MAX_TTS_TEXT_LENGTH = 500
 # Rate limiting and budget control for paid TTS providers
 _tts_lock = threading.Lock()
 _tts_timestamps: List[float] = []
+_tts_ip_timestamps: dict = {}
 MAX_TTS_PER_MINUTE = 10
+MAX_TTS_PER_IP_PER_MINUTE = 5
 
-def check_tts_budget_and_length(text: str):
+def check_tts_access(request: Request, body_token: Optional[str] = None) -> None:
+    """Verify authorization before allowing speech synthesis via paid ElevenLabs quota."""
+    try:
+        from elevenlabs_tts import is_elevenlabs_available
+        has_elevenlabs = is_elevenlabs_available()
+    except Exception:
+        has_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY"))
+
+    expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+    # If ElevenLabs is configured with an API key, require authorization
+    if has_elevenlabs and not expected:
+        expected = os.environ.get("VANISHIELD_API_KEY", os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))).strip()
+
+    if expected:
+        provided = (
+            request.headers.get("X-TTS-Token")
+            or request.headers.get("Authorization", "").replace("Bearer ", "")
+            or (body_token or "")
+        ).strip()
+        if not provided or not hmac.compare_digest(provided, expected):
+            raise HTTPException(
+                status_code=401,
+                detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
+            )
+
+def check_tts_budget_and_length(text: str, request: Request = None) -> None:
     """Enforces text bounds and rate/budget limits before invoking paid voice providers."""
     stripped = text.strip()
     if not stripped:
@@ -83,6 +111,7 @@ def check_tts_budget_and_length(text: str):
             detail=f"Text exceeds maximum permitted length ({MAX_TTS_TEXT_LENGTH} characters)."
         )
     now = time.time()
+    client_ip = (request.client.host if request and request.client else "unknown")
     with _tts_lock:
         _tts_timestamps[:] = [t for t in _tts_timestamps if now - t < 60.0]
         if len(_tts_timestamps) >= MAX_TTS_PER_MINUTE:
@@ -90,7 +119,15 @@ def check_tts_budget_and_length(text: str):
                 status_code=429,
                 detail="TTS generation rate limit / budget quota reached. Please try again in 1 minute."
             )
+        ip_ts = _tts_ip_timestamps.setdefault(client_ip, [])
+        ip_ts[:] = [t for t in ip_ts if now - t < 60.0]
+        if len(ip_ts) >= MAX_TTS_PER_IP_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Per-client TTS rate limit reached. Maximum {MAX_TTS_PER_IP_PER_MINUTE} requests per minute."
+            )
         _tts_timestamps.append(now)
+        ip_ts.append(now)
 
 # Presets definition
 PRESET_CALLS = {
@@ -252,6 +289,7 @@ class SynthesizeRequest(BaseModel):
     model_id: Optional[str] = "eleven_multilingual_v2"
     phone_number: Optional[str] = "+91-1409988776 (ElevenLabs Cloned Call)"
     use_known_transcript: Optional[bool] = False
+    access_token: Optional[str] = None
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_index():
@@ -353,8 +391,9 @@ async def get_tts_voices():
     }
 
 @router.post("/api/tts/synthesize")
-async def tts_synthesize(req: SynthesizeRequest):
-    check_tts_budget_and_length(req.text)
+async def tts_synthesize(req: SynthesizeRequest, request: Request):
+    check_tts_access(request, req.access_token)
+    check_tts_budget_and_length(req.text, request)
     from elevenlabs_tts import synthesize_with_fallback
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
@@ -372,8 +411,9 @@ async def tts_synthesize(req: SynthesizeRequest):
     })
 
 @router.post("/api/tts/simulate-attack")
-async def tts_simulate_attack(req: SynthesizeRequest):
-    check_tts_budget_and_length(req.text)
+async def tts_simulate_attack(req: SynthesizeRequest, request: Request):
+    check_tts_access(request, req.access_token)
+    check_tts_budget_and_length(req.text, request)
     from elevenlabs_tts import synthesize_with_fallback
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
