@@ -1,5 +1,5 @@
 """
-Root re-export of ml_pipeline/build_robust_manifest.py for backward compatibility.
+Root re-export and CLI entrypoint for ml_pipeline/build_robust_manifest.py.
 """
 import os
 import sys
@@ -10,3 +10,6 @@ if _ml_dir not in sys.path:
     sys.path.insert(0, _ml_dir)
 
 from ml_pipeline.build_robust_manifest import *
+
+if __name__ == "__main__":
+    main()

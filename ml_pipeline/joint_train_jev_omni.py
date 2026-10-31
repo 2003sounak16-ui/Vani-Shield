@@ -98,13 +98,37 @@ def main():
         real_files = sorted(glob.glob("data_pilot/pilot_real_*.wav") + glob.glob("data_demo/real/*.wav"))
         fake_files = sorted(glob.glob("data_pilot/pilot_fake_*.wav") + glob.glob("data_demo/fake/*.wav"))
 
+        SAMPLE_TRANSCRIPTS = {
+            "pilot_real_1.wav": "Hey, are we still meeting at the library at four for the compiler design assignment?",
+            "pilot_real_2.wav": "Hi Mom, I will be reaching home a bit late tonight, please do not wait for dinner.",
+            "pilot_real_3.wav": "Let us review the hackathon architecture slides before the presentation tomorrow morning.",
+            "pilot_real_4.wav": "Could you please confirm if the store is open on Sunday afternoon?",
+            "call_en_safe.wav": "Hi Doctor, this is Rajesh calling to confirm my medical checkup appointment for tomorrow at ten AM.",
+            "call_hi_safe.wav": "Namaste Sharma ji, kal subah dus baje meeting ke liye office aana mat bhooliyega.",
+            "call_bn_safe.wav": "Nomoshkar Kaku, amra shonibar shondhe bela apnader bari ashbo bole bhabchhi.",
+            "pilot_fake_1.wav": "Hello, this is State Bank fraud control. Your account is blocked. Share your six digit OTP immediately.",
+            "pilot_fake_2.wav": "Namaskar, aapka bank KYC expire ho gaya hai. Turant apna OTP aur bank account details batayein.",
+            "pilot_fake_3.wav": "Urgent alert from credit card security. Confirm your card CVV and OTP right now to cancel a charge.",
+            "pilot_fake_4.wav": "Aapka bank account chalu rakhne ke liye abhi apna UPI PIN aur OTP share karein.",
+            "call_en_scam.wav": "Urgent security notice from State Bank of India fraud team. Share your six-digit OTP right now to reverse debit.",
+            "call_hi_scam.wav": "Aapka State Bank account band ho chuka hai. Turant apna chhah anko ka OTP share karein.",
+            "call_bn_scam.wav": "Apnar bank account theke ponchash hajar taka debit kora hoyechhe. OTP bolun account block korar jonno.",
+            "scam_sbi_otp.wav": "Hello, this is State Bank fraud control. Your account is blocked. Share your six digit OTP immediately.",
+            "scam_kyc_hindi.wav": "Namaskar, aapka bank KYC expire ho gaya hai. Turant apna OTP aur bank account details batayein.",
+            "scam_card_cvv.wav": "Urgent alert from credit card security. Confirm your card CVV and OTP right now to cancel a 45,000 rupee charge.",
+            "scam_upi_pin.wav": "Aapka bank account chalu rakhne ke liye abhi apna UPI PIN aur OTP share karein."
+        }
+
         dataset = []
-        # Label-independent conversational transcripts without filenames or explicit class keywords
         for f in real_files:
-            prompt = "Call Transcript: Routine conversation between verified contacts regarding scheduling and daily tasks. Evaluate conversation authenticity and communicative intent."
+            fname = os.path.basename(f)
+            t = SAMPLE_TRANSCRIPTS.get(fname, f"Conversational dialog between verified contacts regarding scheduling and daily tasks: {fname.replace('.wav', '')}")
+            prompt = f"Call Transcript: {t}. Evaluate caller intent, urgency markers, and communicative authenticity."
             dataset.append((f, prompt, 0))
         for f in fake_files:
-            prompt = "Call Transcript: Urgent caller demanding immediate security verification code and credentials. Evaluate conversation authenticity and communicative intent."
+            fname = os.path.basename(f)
+            t = SAMPLE_TRANSCRIPTS.get(fname, f"Urgent caller demanding immediate security verification code and credentials: {fname.replace('.wav', '')}")
+            prompt = f"Call Transcript: {t}. Evaluate caller intent, urgency markers, and communicative authenticity."
             dataset.append((f, prompt, 1))
 
         print(f"Preparing {len(dataset)} joint (Audio + Jev-Omni 3840-d) training samples...")

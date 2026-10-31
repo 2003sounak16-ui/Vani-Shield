@@ -17,6 +17,21 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# Load root .env before importing routers or reading environment variables
+_root_env = os.path.join(PROJECT_ROOT, ".env")
+if os.path.exists(_root_env):
+    try:
+        with open(_root_env, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
+
 from backend.api.evaluate import router as evaluate_router
 from backend.api.ws_stream import router as ws_router
 from backend.api.banking_hold import router as banking_router

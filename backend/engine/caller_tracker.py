@@ -43,11 +43,18 @@ REGIONAL_NODES = {
     "Jamtara": {"lat": 23.9632, "lon": 86.8029, "state": "Jharkhand", "country": "India"},
 }
 
+def get_caller_hash_secret() -> bytes:
+    """Resolve salt/secret with priority for VANISHIELD_HMAC_SECRET then VANISHIELD_SALT."""
+    secret = os.environ.get("VANISHIELD_HMAC_SECRET", os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt"))
+    return secret.encode("utf-8") if isinstance(secret, str) else secret
+
 def hash_caller_identity(phone_number: str) -> str:
     """DPDP Act 2023 compliant HMAC-SHA256 caller identity pseudonymizer."""
-    salt = os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt").encode("utf-8")
-    clean_phone = phone_number.strip()
-    return hmac.new(salt, clean_phone.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    if not phone_number:
+        return "ANONYMIZED_CALLER"
+    clean = "".join(filter(str.isdigit, str(phone_number).strip()))
+    secret = get_caller_hash_secret()
+    return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 def mask_phone(phone_number: str) -> str:
     """Safely mask caller phone number for DPDP-compliant privacy preservation."""

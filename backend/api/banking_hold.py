@@ -5,9 +5,27 @@ Provides automated and manual payment freeze endpoints for UPI and Net Banking.
 """
 
 import os
+import sys
 import time
 import hmac
 from fastapi import APIRouter, HTTPException
+
+# Ensure root .env is loaded for PIN and salt configuration
+_api_dir = os.path.dirname(os.path.abspath(__file__))
+_root_dir = os.path.abspath(os.path.join(_api_dir, "..", ".."))
+_root_env = os.path.join(_root_dir, ".env")
+if os.path.exists(_root_env):
+    try:
+        with open(_root_env, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    if k and k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/banking", tags=["Banking Circuit Breaker"])

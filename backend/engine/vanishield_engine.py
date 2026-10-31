@@ -1061,7 +1061,7 @@ class VaniShieldCore:
 
 
         # Include tail window aligned to len - window_size if audio extends beyond last hop
-        if len(audio_chunk_16k) > window_size:
+        if len(audio_chunk_16k) > window_size and (len(audio_chunk_16k) - window_size) % hop_size != 0:
             tail_clip = audio_chunk_16k[-window_size:]
             if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
                 clips.append(tail_clip)
