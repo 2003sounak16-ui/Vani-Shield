@@ -214,6 +214,15 @@ class TestVaniShieldFixes(unittest.TestCase):
             self.assertTrue(is_bl)
             self.assertEqual(bl_data["caller_hash"], h)
 
+            # Verify backward compatibility with legacy-hashed records
+            h_legacy = ct.hash_caller_identity_legacy(test_phone)
+            import json
+            saved_bl[h_legacy] = {"caller_hash": h_legacy, "phone_masked": "+919****6655", "risk_score": 90.0}
+            with open(temp_bl, "w", encoding="utf-8") as f:
+                json.dump(saved_bl, f)
+            is_bl_legacy, bl_data_legacy = ct.is_blacklisted(test_phone)
+            self.assertTrue(is_bl_legacy)
+
         finally:
             ct.BLACKLIST_PATH = old_bl
             if os.path.exists(temp_bl):

@@ -49,12 +49,19 @@ def get_caller_hash_secret() -> bytes:
     return secret.encode("utf-8") if isinstance(secret, str) else secret
 
 def hash_caller_identity(phone_number: str) -> str:
-    """DPDP Act 2023 compliant HMAC-SHA256 caller identity pseudonymizer."""
+    """DPDP Act 2023 compliant HMAC-SHA256 caller identity pseudonymizer (canonical digits)."""
     if not phone_number:
         return "ANONYMIZED_CALLER"
     clean = "".join(filter(str.isdigit, str(phone_number).strip()))
     secret = get_caller_hash_secret()
     return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+def hash_caller_identity_legacy(phone_number: str) -> str:
+    """Legacy hash without digits stripping for backward compatibility with older saved records."""
+    if not phone_number:
+        return "ANONYMIZED_CALLER"
+    secret = get_caller_hash_secret()
+    return hmac.new(secret, str(phone_number).strip().encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 def mask_phone(phone_number: str) -> str:
     """Safely mask caller phone number for DPDP-compliant privacy preservation."""
@@ -182,16 +189,26 @@ def mark_scammer(phone_number: str, risk_score: float, reason: str, metadata: di
     return record
 
 def is_blacklisted(phone_number: str):
-    """Check if caller is marked as a scammer by checking HMAC hash or legacy phone keys."""
+    """Check if caller is marked as a scammer by checking canonical HMAC hash, legacy hash, or raw keys."""
     blacklist = load_blacklist()
-    caller_hash = hash_caller_identity(phone_number)
-    if caller_hash in blacklist:
-        return True, blacklist[caller_hash]
-    if phone_number in blacklist:
-        return True, blacklist[phone_number]
+    h_canonical = hash_caller_identity(phone_number)
+    h_legacy = hash_caller_identity_legacy(phone_number)
+    clean_phone = str(phone_number).strip()
+
+    # Direct key lookup
+    if h_canonical in blacklist:
+        return True, blacklist[h_canonical]
+    if h_legacy in blacklist:
+        return True, blacklist[h_legacy]
+    if clean_phone in blacklist:
+        return True, blacklist[clean_phone]
+
+    # Inner record caller_hash attribute lookup
     for key, entry in blacklist.items():
-        if entry.get("caller_hash") == caller_hash:
+        rec_hash = entry.get("caller_hash")
+        if rec_hash in (h_canonical, h_legacy):
             return True, entry
+
     return False, None
 
 def main():
