@@ -31,6 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import io
+import re
 
 import time
 
@@ -43,6 +44,11 @@ import uuid
 import asyncio
 
 import logging
+import functools
+
+# Required by the TTS rate limiter below (_tts_lock). Its absence made
+# app.py raise NameError at import time, so the server could not start.
+import threading
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -96,9 +102,13 @@ from pydantic import BaseModel
 
 
 
-from vanishield_engine import core_engine, JEV_SERVER_URL, PROJECT_ROOT
+from vanishield_engine import core_engine, JEV_SERVER_URL, PROJECT_ROOT, threat_type_from_fusion
 
 from ephemeral_buffer import ram_ring_buffer, hash_caller_identity
+
+import scam_stages
+from scam_stages import fuse_risk
+from call_session import registry as session_registry
 
 
 
@@ -125,6 +135,12 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024               # 25 MB max upload
 MAX_AUDIO_SECONDS = 180                           # 3 minutes max duration
 
 MAX_DECODED_SAMPLES = MAX_AUDIO_SECONDS * 16000  # 2,880,000 samples @ 16kHz
+
+# Minimum wall time between two inference passes on one live session. Clients
+# stream ~250ms packets; a full pass over the 3.5s window costs more than that,
+# so without this the executor queue grows without bound and every reported
+# latency becomes a measure of the backlog rather than of the pipeline.
+MIN_EVAL_INTERVAL_SECONDS = 0.5
 
 
 
@@ -210,19 +226,29 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 
-@app.get("/", response_class=HTMLResponse)
-
-async def serve_index():
-
-    index_path = os.path.join(STATIC_DIR, "index.html")
-
-    if os.path.exists(index_path):
-
-        with open(index_path, "r", encoding="utf-8") as f:
-
+def _serve_static_page(filename: str, missing_hint: str) -> str:
+    path = os.path.join(STATIC_DIR, filename)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
             return f.read()
+    return f"<h1>VaniShield AI Backend Online</h1><p>{missing_hint}</p>"
 
-    return "<h1>VaniShield AI Backend Online</h1>"
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    return _serve_static_page("index.html", "static/index.html is missing.")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard():
+    """Mission control: full pillar breakdown, per-window scores, event log."""
+    return _serve_static_page("mission-control.html", "static/mission-control.html is missing.")
+
+
+@app.get("/call", response_class=HTMLResponse)
+async def serve_call_screen():
+    """The on-call alert screen a person actually sees when the phone rings."""
+    return _serve_static_page("call-screen.html", "static/call-screen.html is missing.")
 
 
 
@@ -300,53 +326,58 @@ PRESET_CALLS = {
 
 
 
-def _sync_simulate_preset(preset: dict) -> dict:
+def load_wav_16k_mono(path: str) -> np.ndarray:
+    """
+    Reads a fixture WAV as 16kHz mono float32.
 
-    path = preset["audio_file"]
+    Uses soundfile rather than torchaudio.load: recent torchaudio delegates
+    decoding to TorchCodec and raises without it, which broke every preset on
+    an otherwise working install. soundfile reads WAV directly and is already
+    a declared dependency. torchaudio stays as a fallback for containers
+    soundfile cannot open.
 
+    Also resolves fixtures that moved into demo_samples/{real,fake}/, so a
+    preset entry written against either layout keeps working.
+    """
     if not os.path.isabs(path):
-
         path = os.path.join(PROJECT_ROOT, path)
 
     if not os.path.exists(path):
-
         fname = os.path.basename(path)
-
-        for sub in ["real", "fake", ""]:
-
-            cand = os.path.join(PROJECT_ROOT, "demo_samples", sub, fname) if sub else os.path.join(PROJECT_ROOT, "demo_samples", fname)
-
+        for sub in ("real", "fake", ""):
+            cand = (
+                os.path.join(PROJECT_ROOT, "demo_samples", sub, fname)
+                if sub
+                else os.path.join(PROJECT_ROOT, "demo_samples", fname)
+            )
             if os.path.exists(cand):
-
                 path = cand
-
                 break
-
-        if not os.path.exists(path):
-
+        else:
             raise FileNotFoundError(f"Preset audio file fixture not found: {path}")
 
-
-
-    wav, sr = torchaudio.load(path)
-
-    if wav.shape[0] > 1:
-
-        wav = wav.mean(dim=0, keepdim=True)
+    try:
+        data, sr = sf.read(path, dtype="float32", always_2d=True)
+        audio = data.mean(axis=1)
+    except Exception as e:
+        logger.warning(f"soundfile could not read {path} ({e}); falling back to torchaudio.")
+        wav, sr = torchaudio.load(path)
+        if wav.shape[0] > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+        audio = wav.squeeze(0).numpy()
 
     if sr != 16000:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
 
-        wav = torchaudio.transforms.Resample(sr, 16000)(wav)
-
-    audio_np = wav.squeeze(0).numpy()
-
-
-
-    if len(audio_np) > MAX_DECODED_SAMPLES:
-
-        audio_np = audio_np[:MAX_DECODED_SAMPLES]
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    if len(audio) > MAX_DECODED_SAMPLES:
+        audio = audio[:MAX_DECODED_SAMPLES]
+    return audio
 
 
+def _sync_simulate_preset(preset: dict) -> dict:
+    audio_np = load_wav_16k_mono(preset["audio_file"])
 
     return core_engine.evaluate_live_call(
 
@@ -641,6 +672,268 @@ async def evaluate_audio_file(
     finally:
 
         UPLOAD_SEMAPHORE.release()
+# -------------------------------------------------------------
+# STAGE METADATA — lets a client render chips and thresholds before
+# the first call arrives, in the language it asks for.
+# -------------------------------------------------------------
+@app.get("/api/stages")
+async def get_stage_metadata(lang: str = "en"):
+    lang = scam_stages.normalize_lang(lang)
+    return {
+        "lang": lang,
+        "supported_langs": list(scam_stages.SUPPORTED_LANGS),
+        "stages": [
+            {
+                "key": key,
+                "label": scam_stages.stage_label(key, lang),
+                "weight": scam_stages.STAGE_WEIGHTS[key],
+                "explanation": scam_stages.stage_explanation(key, lang),
+            }
+            for key in scam_stages.STAGE_ORDER
+        ],
+        "thresholds": {
+            "red": scam_stages.RED_THRESHOLD,
+            "amber": scam_stages.AMBER_THRESHOLD,
+            "acoustic_synthetic": scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD,
+            "circuit_breaker": 70.0,
+        },
+        "band_labels": {
+            band: scam_stages.band_label(band, lang)
+            for band in (scam_stages.BAND_RED, scam_stages.BAND_AMBER, scam_stages.BAND_GREEN)
+        },
+    }
+
+
+# -------------------------------------------------------------
+# SESSION-ACCUMULATED FRAME ASSEMBLY
+#
+# The engine evaluates one window at a time and is deliberately stateless.
+# A call, though, is cumulative: a scammer who established authority thirty
+# seconds ago has still established it now. So the frame a client receives is
+# re-fused from the session's accumulated stages and whole-call EMA, not from
+# the single window that happened to arrive last.
+# -------------------------------------------------------------
+class _CallAccumulator:
+    """Sticky per-call evidence that the stateless engine cannot carry."""
+
+    def __init__(self):
+        self.payment_attempt = False
+        self.high_sensitivity = False
+
+    def observe(self, stage_payload: dict):
+        if stage_payload.get("payment_attempt"):
+            self.payment_attempt = True
+        if stage_payload.get("high_sensitivity_credential"):
+            self.high_sensitivity = True
+
+
+def _assemble_frame(result: dict, session, accumulator: "_CallAccumulator") -> dict:
+    """Folds one engine result into the session and returns the client frame."""
+    acoustic = result.get("acoustic") or {}
+    stage_payload = result.get("stage_analysis") or {}
+    telecom = result.get("telecom") or {}
+    accumulator.observe(stage_payload)
+
+    lang = scam_stages.normalize_lang(result.get("lang"))
+    session.set_lang(lang)
+
+    update = session.update(
+        window_probs=acoustic.get("window_probs") or [],
+        stages=stage_payload.get("stages") or [],
+        payment_attempt=accumulator.payment_attempt,
+        risk_score=float((result.get("fusion") or {}).get("risk_score") or 0.0),
+        band=(result.get("fusion") or {}).get("band") or scam_stages.BAND_GREEN,
+        latency_ms=result.get("latency_ms"),
+        transcript=result.get("transcript") or "",
+        circuit_breaker_engaged=bool((result.get("circuit_breaker") or {}).get("engaged")),
+        high_sensitivity_credential=accumulator.high_sensitivity,
+        line_silent=(result.get("status") == "STANDBY_SILENCE"),
+    )
+
+    accumulated_stages = update["stages"]
+    call_ema = update["acoustic_ema"]
+
+    fusion = fuse_risk(
+        accumulated_stages,
+        acoustic_prob=call_ema,
+        payment_attempt=accumulator.payment_attempt,
+        blacklisted=bool(telecom.get("is_blacklisted", False)),
+        voip_spoofed=bool(telecom.get("is_voip_spoofed", False)),
+        credential_high_sensitivity=accumulator.high_sensitivity,
+    )
+    breaker_engaged = bool(
+        telecom.get("is_blacklisted", False) or fusion["risk_score"] >= 70.0
+    )
+
+    # CallSession names a running call "LIVE"; the client contract calls it
+    # "ACTIVE". Normalise here rather than in either of them, so the wire
+    # format stays stable whichever side is edited next.
+    call_state = update["call_state"]
+    if call_state == "LIVE":
+        call_state = "ACTIVE"
+
+    frame = dict(result)
+    frame["session_id"] = session.session_id
+    frame["elapsed_sec"] = update["elapsed_sec"]
+    frame["call_state"] = call_state
+    frame["events"] = update["new_events"]
+    frame["event_cursor"] = update["event_cursor"]
+    frame["lang"] = lang
+    frame["acoustic"] = {
+        **acoustic,
+        "ema": call_ema,
+        "synthetic": bool(call_ema >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD),
+    }
+    frame["stage_analysis"] = {
+        **stage_payload,
+        "stages": accumulated_stages,
+        "stage_count": len(accumulated_stages),
+        "labels": scam_stages.stage_labels(lang),
+        "explanations": [
+            scam_stages.stage_explanation(s, lang) for s in accumulated_stages
+        ],
+        "payment_attempt": accumulator.payment_attempt,
+        "high_sensitivity_credential": accumulator.high_sensitivity,
+        "lang": lang,
+    }
+    frame["fusion"] = {
+        **fusion,
+        "band_label": scam_stages.band_label(fusion["band"], lang),
+    }
+    frame["unified_risk_score"] = fusion["risk_score"]
+    # Re-derive from the accumulated evidence, for the same reason the engine
+    # does: a badge that contradicts the score is worse than no badge.
+    frame["threat_type"] = threat_type_from_fusion(fusion, accumulated_stages, call_ema)
+    frame["circuit_breaker"] = {
+        "engaged": breaker_engaged,
+        "action": "LOCK_BANKING_AND_UPI" if breaker_engaged else "ALLOW_NORMAL_CALL",
+        "threshold": 70.0,
+    }
+    return frame
+
+
+# -------------------------------------------------------------
+# WEBSOCKET: PRESET REPLAY
+# Streams a shipped sample call through the real pipeline in steps, so the
+# dashboard's staged reveal is driven by actual inference rather than by a
+# scripted timer. Audio grows cumulatively and the transcript is revealed one
+# sentence at a time, which is what a live call actually looks like.
+# -------------------------------------------------------------
+REPLAY_STEP_SECONDS = 2.4
+REPLAY_MIN_STEPS = 5
+REPLAY_MAX_STEPS = 8
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?।])\s+")
+
+
+def _split_transcript(transcript: str) -> List[str]:
+    if not transcript:
+        return []
+    parts = [p.strip() for p in _SENTENCE_SPLIT.split(transcript) if p.strip()]
+    return parts or [transcript.strip()]
+
+
+def _load_preset_audio(preset: dict) -> np.ndarray:
+    return load_wav_16k_mono(preset["audio_file"])
+
+
+@app.websocket("/ws/replay/{preset_id}")
+async def replay_preset_websocket(websocket: WebSocket, preset_id: str):
+    await websocket.accept()
+    session_id = f"replay_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+
+    preset = PRESET_CALLS.get(preset_id)
+    if preset is None:
+        await websocket.send_json({"status": "error", "error": f"Unknown preset '{preset_id}'"})
+        await websocket.close()
+        return
+    if core_engine is None:
+        await websocket.send_json({
+            "status": "error",
+            "error": "VaniShield core engine not initialized (trained weights missing).",
+        })
+        await websocket.close()
+        return
+
+    loop = asyncio.get_running_loop()
+    session = session_registry.get_or_create(session_id, preset["phone"])
+    accumulator = _CallAccumulator()
+
+    try:
+        audio = await loop.run_in_executor(ANALYSIS_EXECUTOR, _load_preset_audio, preset)
+        sentences = _split_transcript(preset.get("transcript", ""))
+        step_samples = int(REPLAY_STEP_SECONDS * 16000)
+
+        # Pace by audio length, not by sentence count. Keying the step count to
+        # sentences made the Bengali fixture — two long sentences — finish in
+        # about two seconds, which is too fast to read and makes the staged
+        # reveal pointless. Clamped so a very short or very long clip still
+        # plays over a watchable span.
+        audio_steps = max(1, -(-len(audio) // step_samples))
+        total_steps = max(REPLAY_MIN_STEPS, min(REPLAY_MAX_STEPS, audio_steps))
+
+        for step in range(total_steps):
+            progress = (step + 1) / total_steps
+            # Cumulative audio, so each step re-scores everything heard so far.
+            upto = len(audio) if step == total_steps - 1 else max(
+                step_samples, min(len(audio), round(len(audio) * progress))
+            )
+            chunk = audio[:upto]
+            # Reveal the transcript in step with the audio rather than one
+            # sentence per frame, so the two stay in sync at any step count.
+            if sentences:
+                shown = max(1, min(len(sentences), round(len(sentences) * progress)))
+                revealed = " ".join(sentences[:shown])
+            else:
+                revealed = None
+
+            result = await loop.run_in_executor(
+                ANALYSIS_EXECUTOR,
+                functools.partial(
+                    core_engine.evaluate_live_call,
+                    audio_chunk_16k=chunk,
+                    phone_number=preset["phone"],
+                    known_transcript=revealed,
+                    is_upload=False,
+                    persist_blacklist=False,
+                ),
+            )
+            frame = _assemble_frame(result, session, accumulator)
+            frame["replay"] = {
+                "preset_id": preset_id,
+                "step": step + 1,
+                "total_steps": total_steps,
+            }
+            if step == total_steps - 1:
+                frame["call_state"] = "ENDED"
+            await websocket.send_json(frame)
+
+            if step < total_steps - 1:
+                await asyncio.sleep(REPLAY_STEP_SECONDS)
+
+        session.end("ENDED")
+    except WebSocketDisconnect:
+        logger.info(f"Replay {session_id} disconnected by client.")
+    except FileNotFoundError as fnf:
+        try:
+            await websocket.send_json({"status": "error", "error": str(fnf)})
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Replay error for preset '{preset_id}': {e}")
+        try:
+            await websocket.send_json({"status": "error", "error": f"Replay failed: {e}"})
+        except Exception:
+            pass
+    finally:
+        session_registry.drop(session_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+
+
 
 
 
@@ -691,104 +984,124 @@ async def live_call_websocket(websocket: WebSocket):
 
 
     loop = asyncio.get_running_loop()
+    # Reap abandoned sessions here rather than on a timer: a half-open socket
+    # that never sent END_CALL would otherwise pin its state indefinitely, and
+    # a new connection is the only moment we are guaranteed to be running.
+    reaped = session_registry.reap_idle()
+    if reaped:
+        logger.info(f"Reaped {reaped} idle call session(s) before accepting {session_id}.")
 
-
+    session = session_registry.get_or_create(session_id, caller_phone)
+    accumulator = _CallAccumulator()
+    last_eval = 0.0
 
     try:
-
         while True:
-
             # Receive binary PCM packet from client
-
             message = await websocket.receive()
-
             if "bytes" in message:
-
                 pcm_bytes = message["bytes"]
-
-                # 1. Push to Ephemeral RAM Ring Buffer (500ms sliding window, 0 disk I/O)
-
+                # 1. Push to Ephemeral RAM Ring Buffer (sliding window, 0 disk I/O)
                 ram_ring_buffer.push_chunk(session_id, pcm_bytes)
 
-
+                # Throttle inference. Clients send ~250ms packets, but a full
+                # pass over the 3.5s window costs far more than 250ms of GPU,
+                # so evaluating every packet would queue up unboundedly and
+                # make the reported latency meaningless. Buffer every packet,
+                # score at most every MIN_EVAL_INTERVAL.
+                now = time.perf_counter()
+                if now - last_eval < MIN_EVAL_INTERVAL_SECONDS:
+                    continue
+                last_eval = now
 
                 # 2. Extract current evaluation window from RAM
-
                 eval_audio = ram_ring_buffer.get_eval_window(session_id)
 
-
-
-                if core_engine is not None:
-
-                    # 3. Offload evaluation to worker pool (Issue #6) using connection-specific caller ID (Issue #3)
-
-                    eval_result = await loop.run_in_executor(
-
-                        ANALYSIS_EXECUTOR,
-
-                        core_engine.evaluate_live_call,
-
-                        eval_audio,
-
-                        caller_phone
-
-                    )
-
-                else:
-
-                    eval_result = {
-
+                if core_engine is None:
+                    await websocket.send_json({
                         "status": "error",
+                        "session_id": session_id,
+                        "error": "Core engine uninitialized (trained weights missing).",
+                    })
+                    continue
 
-                        "error": "Core engine uninitialized (trained weights missing)."
+                # 3. Offload evaluation to the bounded worker pool, telling the
+                #    engine the language this session has settled on so a
+                #    silent window still renders in the right language.
+                eval_result = await loop.run_in_executor(
+                    ANALYSIS_EXECUTOR,
+                    functools.partial(
+                        core_engine.evaluate_live_call,
+                        audio_chunk_16k=eval_audio,
+                        phone_number=caller_phone,
+                        lang=session.lang,
+                    ),
+                )
 
-                    }
-
-
-
-                # 4. Stream analysis back to client
-
-                await websocket.send_json(eval_result)
-
-
+                # 4. Stream the session-accumulated frame back to the client
+                await websocket.send_json(_assemble_frame(eval_result, session, accumulator))
 
             elif "text" in message:
+                try:
+                    data = json.loads(message["text"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Session {session_id} sent malformed control text; ignoring.")
+                    continue
 
-                data = json.loads(message["text"])
-
-                action = data.get("action")
-
+                action = (data.get("action") or "").upper()
                 if action == "SET_CALLER":
-
                     new_phone = data.get("phone") or data.get("caller_id")
-
                     if new_phone:
-
                         caller_phone = str(new_phone).strip()
-
+                        session.set_caller(caller_phone)
                         logger.info(f"Session {session_id} updated caller ID to: {caller_phone}")
-
+                elif action == "BLOCK_CALLER":
+                    if core_engine is None:
+                        await websocket.send_json({
+                            "status": "error",
+                            "error": "Core engine uninitialized; cannot block caller.",
+                        })
+                        continue
+                    try:
+                        blocked = await loop.run_in_executor(
+                            ANALYSIS_EXECUTOR,
+                            functools.partial(
+                                core_engine.block_caller,
+                                caller_phone,
+                                reason="Blocked from live call screen",
+                            ),
+                        )
+                        await websocket.send_json({
+                            "status": "blocked",
+                            "session_id": session_id,
+                            "caller": blocked["caller"],
+                            "persisted": blocked["persisted"],
+                        })
+                    except ValueError as ve:
+                        await websocket.send_json({"status": "error", "error": str(ve)})
                 elif action == "END_CALL":
-
                     # Hard purge from volatile memory upon call completion
-
                     ram_ring_buffer.purge_session(session_id)
-
+                    ended = session.end("ENDED")
+                    try:
+                        await websocket.send_json({
+                            "status": "ended",
+                            "session_id": session_id,
+                            "call_state": "ENDED",
+                            "events": (ended or {}).get("new_events", []),
+                        })
+                    except Exception:
+                        pass
                     logger.info(f"Session {session_id} ended. Volatile RAM purged.")
-
                     break
-
     except WebSocketDisconnect:
-
         ram_ring_buffer.purge_session(session_id)
-
         logger.info(f"WebSocket client disconnected. Session {session_id} purged from RAM.")
-
     except Exception as e:
-
         ram_ring_buffer.purge_session(session_id)
-
         logger.error(f"WebSocket error: {e}")
+    finally:
+        session_registry.drop(session_id)
 
 
 
@@ -799,23 +1112,34 @@ async def live_call_websocket(websocket: WebSocket):
 # -------------------------------------------------------------
 
 @app.get("/health")
-
 async def health_check():
+    demo_scorer = getattr(core_engine, "demo_scorer", None) if core_engine else None
+
+    # Name the acoustic pillar honestly. A caller cannot otherwise tell a
+    # trained detector from the demo stub, and a UI badge that reads "healthy"
+    # over a heuristic would be the single most misleading thing here.
+    if core_engine is None:
+        acoustic_pillar = {"trained": False, "model": "unavailable"}
+    elif demo_scorer is not None:
+        acoustic_pillar = {"trained": False, **demo_scorer.describe()}
+    else:
+        acoustic_pillar = {"trained": True, "model": "Wav2Vec 2.0 (fine-tuned checkpoint)"}
 
     return {
-
         "status": "healthy" if core_engine is not None else "degraded_missing_weights",
-
         "engine": "VaniShield AI Core v2.0",
-
         "device": core_engine.device if core_engine is not None else "unavailable",
-
         "cuda_available": torch.cuda.is_available(),
-
         "jev_server": JEV_SERVER_URL,
-
-        "dpdp_privacy": "Ephemeral In-Process RAM Ring Buffer Active"
-
+        "dpdp_privacy": "Ephemeral In-Process RAM Ring Buffer Active",
+        "demo_mode": demo_scorer is not None,
+        "acoustic_pillar": acoustic_pillar,
+        "asr_engine": getattr(core_engine, "asr_name", "unavailable") if core_engine else "unavailable",
+        "stage_pillar": {
+            "stages": list(scam_stages.STAGE_ORDER),
+            "languages": list(scam_stages.SUPPORTED_LANGS),
+        },
+        "active_calls": session_registry.active_count(),
     }
 
 
@@ -829,6 +1153,39 @@ async def get_blacklist():
         return core_engine.blacklist
 
     return {}
+
+
+class BlockRequest(BaseModel):
+    phone_number: str
+    reason: Optional[str] = "Blocked by user"
+
+
+@app.post("/api/blacklist")
+async def add_to_blacklist(payload: BlockRequest):
+    """Blocks a caller on the user's own instruction."""
+    if core_engine is None:
+        raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
+    try:
+        result = core_engine.block_caller(payload.phone_number, reason=payload.reason or "Blocked by user")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return {"status": "blocked", **result}
+
+
+@app.delete("/api/blacklist/{phone_number:path}")
+async def remove_from_blacklist(phone_number: str):
+    """
+    Unblocks a caller.
+
+    The circuit breaker writes entries automatically at risk >= 70, so without
+    this a single false positive would permanently block a real contact with no
+    way back.
+    """
+    if core_engine is None:
+        raise HTTPException(status_code=503, detail="VaniShield core engine not initialized.")
+    removed = core_engine.unblock_caller(phone_number)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"'{phone_number}' is not on the blacklist.")
 
 
 
