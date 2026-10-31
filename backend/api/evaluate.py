@@ -32,7 +32,7 @@ except ImportError:
     torchaudio = None
     TORCH_AVAILABLE = False
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Form
+from fastapi import APIRouter, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from pydantic import BaseModel
 
@@ -84,17 +84,17 @@ def check_tts_access(request: Request, body_token: Optional[str] = None) -> None
         has_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY"))
 
     expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
-    # If ElevenLabs is configured with an API key, require authorization
     if has_elevenlabs and not expected:
         expected = os.environ.get("VANISHIELD_API_KEY", os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))).strip()
 
-    if expected:
+    if expected or has_elevenlabs:
+        target_token = expected or "1234"
         provided = (
             request.headers.get("X-TTS-Token")
             or request.headers.get("Authorization", "").replace("Bearer ", "")
             or (body_token or "")
         ).strip()
-        if not provided or not hmac.compare_digest(provided, expected):
+        if not provided or not hmac.compare_digest(provided, target_token):
             raise HTTPException(
                 status_code=401,
                 detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
@@ -256,16 +256,27 @@ def _sync_evaluate_audio(audio_bytes: bytes, phone: str = "+91-1409988776 (Direc
         data = data[:MAX_DECODED_SAMPLES]
 
     if core_engine is not None:
-        return core_engine.evaluate_live_call(
+        result = core_engine.evaluate_live_call(
             data,
             phone_number=phone,
             known_transcript=known_transcript,
             is_upload=True
         )
+        cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+        if cb_engaged and not banking_state.locked:
+            banking_state.locked = True
+            banking_state.risk_score = result.get("unified_risk_score", 95.0)
+            banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+        return result
     # Lightweight fallback for audio evaluation
     rms = float(np.sqrt(np.mean(data**2))) if len(data) > 0 else 0.0
     is_scam = bool(known_transcript and any(k in known_transcript.lower() for k in ["otp", "cvv", "pin", "kyc"]))
     risk = 95.0 if is_scam else (35.0 if rms > 0.05 else 5.0)
+    cb_engaged = is_scam or (risk >= 70.0)
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = risk
+        banking_state.reason = "Automated Defense: Scam detected (Audio Fallback)"
     return {
         "status": "success",
         "latency_ms": 18.0,

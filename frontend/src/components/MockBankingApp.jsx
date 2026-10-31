@@ -28,8 +28,23 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
           setTimeout(() => setTransferError(null), 5000);
         }
       } else {
-        setTransferMsg(`Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
-        setTimeout(() => setTransferMsg(null), 4000);
+        // Direct server API invocation when onTransfer callback is omitted
+        const host = window.location.hostname || '127.0.0.1';
+        const port = (window.location.port === '5173' || window.location.port === '3000' || !window.location.port) ? '8000' : window.location.port;
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const res = await fetch(`${protocol}//${host}:${port}/api/banking/simulate-transfer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payee, amount: parseFloat(amount) || 0, pin: '1234' })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setTransferMsg(data.message || `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
+          setTimeout(() => setTransferMsg(null), 4000);
+        } else {
+          setTransferError(data.detail || data.message || 'Transaction blocked by banking circuit breaker.');
+          setTimeout(() => setTransferError(null), 5000);
+        }
       }
     } catch (err) {
       setTransferError('Transaction rejected: Unable to communicate with banking service.');

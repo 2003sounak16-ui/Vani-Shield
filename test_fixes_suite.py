@@ -233,6 +233,20 @@ class TestVaniShieldFixes(unittest.TestCase):
                 self.assertTrue(is_bl_legacy, "Legacy hash backward-compat lookup must succeed")
                 self.assertEqual(bl_data_legacy["caller_hash"], h_legacy,
                                  "Returned record must be the legacy-keyed entry")
+
+                # Verify that even when VANISHIELD_HMAC_SECRET is set and differs from VANISHIELD_SALT,
+                # the legacy record saved with VANISHIELD_SALT is still correctly matched (Issue #1)
+                old_hmac_secret = os.environ.get("VANISHIELD_HMAC_SECRET")
+                try:
+                    os.environ["VANISHIELD_HMAC_SECRET"] = "new-different-hmac-secret-999"
+                    is_bl_migrated, bl_data_migrated = ct.is_blacklisted(test_phone)
+                    self.assertTrue(is_bl_migrated, "Must match legacy record even when VANISHIELD_HMAC_SECRET differs from VANISHIELD_SALT")
+                    self.assertEqual(bl_data_migrated["caller_hash"], h_legacy)
+                finally:
+                    if old_hmac_secret is not None:
+                        os.environ["VANISHIELD_HMAC_SECRET"] = old_hmac_secret
+                    else:
+                        os.environ.pop("VANISHIELD_HMAC_SECRET", None)
             finally:
                 ct.BLACKLIST_PATH = temp_bl  # restore to canonical temp file
                 if os.path.exists(temp_bl_legacy):
@@ -326,6 +340,32 @@ class TestVaniShieldFixes(unittest.TestCase):
             self.assertTrue(tx_res["success"])
         finally:
             loop.close()
+
+        # 3. Test real audio evaluation trips banking_state.locked (Issue #5)
+        from backend.api.evaluate import _sync_evaluate_audio
+        import backend.api.evaluate as ev_mod
+        from unittest.mock import MagicMock
+        state.locked = False
+        saved_engine = ev_mod.core_engine
+        try:
+            mock_eng = MagicMock()
+            mock_eng.evaluate_live_call = MagicMock(return_value={
+                "circuit_breaker": {"engaged": True},
+                "unified_risk_score": 98.0,
+                "threat_type": "AI_CLONE_AND_FINANCIAL_SCAM"
+            })
+            ev_mod.core_engine = mock_eng
+            saved_loader = ev_mod.load_audio_as_16k_np
+            ev_mod.load_audio_as_16k_np = MagicMock(return_value=np.zeros(16000, dtype=np.float32))
+            try:
+                res = _sync_evaluate_audio(b"dummy_wav", "+91-1409988776", None)
+            finally:
+                ev_mod.load_audio_as_16k_np = saved_loader
+            self.assertTrue(state.locked, "Real audio evaluation tripping circuit breaker must set banking state locked to True")
+            self.assertEqual(state.risk_score, 98.0)
+        finally:
+            ev_mod.core_engine = saved_engine
+            state.locked = False
 
 if __name__ == "__main__":
     unittest.main()

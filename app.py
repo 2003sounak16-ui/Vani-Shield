@@ -556,6 +556,12 @@ def _sync_evaluate_audio(content: bytes, phone_number: str, transcript: Optional
 
     result["duration_seconds"] = round(len(audio_np) / 16000.0, 2)
 
+    cb_engaged = bool(result.get("circuit_breaker", {}).get("engaged", False))
+    if cb_engaged and not banking_state.locked:
+        banking_state.locked = True
+        banking_state.risk_score = result.get("unified_risk_score", 95.0)
+        banking_state.reason = f"Automated Defense: {result.get('threat_type', 'Scam detected')}"
+
     return result
 
 
@@ -1309,16 +1315,18 @@ def _check_tts_access(request: Request, body_token: Optional[str] = None) -> Non
         has_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY"))
 
     expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+    # When ElevenLabs is configured with an API key, authorization is mandatory to protect paid quota
     if has_elevenlabs and not expected:
         expected = os.environ.get("VANISHIELD_API_KEY", os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))).strip()
 
-    if expected:
+    if expected or has_elevenlabs:
+        target_token = expected or "1234"
         provided = (
             request.headers.get("X-TTS-Token")
             or request.headers.get("Authorization", "").replace("Bearer ", "")
             or (body_token or "")
         ).strip()
-        if not provided or not hmac.compare_digest(provided, expected):
+        if not provided or not hmac.compare_digest(provided, target_token):
             raise HTTPException(
                 status_code=401,
                 detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."

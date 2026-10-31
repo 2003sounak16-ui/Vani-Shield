@@ -44,12 +44,17 @@ REGIONAL_NODES = {
 }
 
 def get_caller_hash_secret() -> bytes:
-    """Resolve salt/secret with priority for VANISHIELD_HMAC_SECRET then VANISHIELD_SALT."""
+    """Resolve current active secret (VANISHIELD_HMAC_SECRET > VANISHIELD_SALT > default)."""
     secret = os.environ.get("VANISHIELD_HMAC_SECRET", os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt"))
     return secret.encode("utf-8") if isinstance(secret, str) else secret
 
+def get_legacy_caller_salt() -> bytes:
+    """Preserve original salt strictly from VANISHIELD_SALT or default, ignoring VANISHIELD_HMAC_SECRET."""
+    secret = os.environ.get("VANISHIELD_SALT", "vanishield-dpdp-2023-secure-salt")
+    return secret.encode("utf-8") if isinstance(secret, str) else secret
+
 def hash_caller_identity(phone_number: str) -> str:
-    """DPDP Act 2023 compliant HMAC-SHA256 caller identity pseudonymizer (canonical digits)."""
+    """DPDP Act 2023 compliant HMAC-SHA256 caller identity pseudonymizer (canonical digits with active secret)."""
     if not phone_number:
         return "ANONYMIZED_CALLER"
     clean = "".join(filter(str.isdigit, str(phone_number).strip()))
@@ -57,11 +62,19 @@ def hash_caller_identity(phone_number: str) -> str:
     return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 def hash_caller_identity_legacy(phone_number: str) -> str:
-    """Legacy hash without digits stripping for backward compatibility with older saved records."""
+    """Legacy hash without digits stripping, preserving original VANISHIELD_SALT for old saved records."""
     if not phone_number:
         return "ANONYMIZED_CALLER"
-    secret = get_caller_hash_secret()
+    secret = get_legacy_caller_salt()
     return hmac.new(secret, str(phone_number).strip().encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+def hash_caller_identity_legacy_canonical(phone_number: str) -> str:
+    """Legacy hash with digits stripping using original VANISHIELD_SALT for transition period."""
+    if not phone_number:
+        return "ANONYMIZED_CALLER"
+    clean = "".join(filter(str.isdigit, str(phone_number).strip()))
+    secret = get_legacy_caller_salt()
+    return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 def mask_phone(phone_number: str) -> str:
     """Safely mask caller phone number for DPDP-compliant privacy preservation."""
@@ -189,10 +202,11 @@ def mark_scammer(phone_number: str, risk_score: float, reason: str, metadata: di
     return record
 
 def is_blacklisted(phone_number: str):
-    """Check if caller is marked as a scammer by checking canonical HMAC hash, legacy hash, or raw keys."""
+    """Check if caller is marked as a scammer by checking canonical HMAC hash, legacy salt hashes, or raw keys."""
     blacklist = load_blacklist()
     h_canonical = hash_caller_identity(phone_number)
     h_legacy = hash_caller_identity_legacy(phone_number)
+    h_legacy_canon = hash_caller_identity_legacy_canonical(phone_number)
     clean_phone = str(phone_number).strip()
 
     # Direct key lookup
@@ -200,13 +214,15 @@ def is_blacklisted(phone_number: str):
         return True, blacklist[h_canonical]
     if h_legacy in blacklist:
         return True, blacklist[h_legacy]
+    if h_legacy_canon in blacklist:
+        return True, blacklist[h_legacy_canon]
     if clean_phone in blacklist:
         return True, blacklist[clean_phone]
 
     # Inner record caller_hash attribute lookup
     for key, entry in blacklist.items():
         rec_hash = entry.get("caller_hash")
-        if rec_hash in (h_canonical, h_legacy):
+        if rec_hash in (h_canonical, h_legacy, h_legacy_canon):
             return True, entry
 
     return False, None
