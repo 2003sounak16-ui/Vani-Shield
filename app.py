@@ -141,7 +141,13 @@ UPLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_WORKERS)
 # Unlike banking_hold this has no default PIN. A well-known default on a
 # persisted, shared list is worse than not shipping the feature, so an
 # unconfigured deployment refuses the write instead of accepting it.
-CONTROL_PIN_ENV_VARS = ("VANISHIELD_CONTROL_PIN", "VANISHIELD_BANKING_PIN")
+CONTROL_PIN_ENV_VARS = (
+    "VANISHIELD_CONTROL_PIN",
+    # Both of the names backend/api/banking_hold.py already accepts, so a
+    # deployment that configured either of them does not silently get 503.
+    "VANISHIELD_BANKING_PIN",
+    "VANISHIELD_UNLOCK_PIN",
+)
 CONTROL_PIN_HEADER = "X-VaniShield-Pin"
 
 
@@ -165,8 +171,12 @@ def require_control_pin(pin: Optional[str]) -> None:
             ),
         )
     # compare_digest rather than ==, so a wrong PIN cannot be recovered by
-    # timing the response.
-    if not pin or not hmac.compare_digest(str(pin), expected):
+    # timing the response. Encoded first: compare_digest rejects str inputs
+    # that are not ASCII-only with TypeError, which would turn a non-ASCII PIN
+    # into a 500 instead of an authorisation decision.
+    if not pin:
+        raise HTTPException(status_code=403, detail="Invalid or missing control PIN.")
+    if not hmac.compare_digest(str(pin).encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=403, detail="Invalid or missing control PIN.")
 
 
@@ -185,7 +195,38 @@ MAX_DECODED_SAMPLES = MAX_AUDIO_SECONDS * 16000  # 2,880,000 samples @ 16kHz
 # 250ms packets gets a frame about every 500ms, not one per packet. Clients
 # must treat frames as a stream of updates rather than request/response.
 # Set VANISHIELD_MIN_EVAL_INTERVAL=0 to score every packet.
-MIN_EVAL_INTERVAL_SECONDS = float(os.environ.get("VANISHIELD_MIN_EVAL_INTERVAL", "0.5"))
+DEFAULT_MIN_EVAL_INTERVAL_SECONDS = 0.5
+
+
+def _eval_interval_from_env() -> float:
+    """
+    Reads the interval, falling back rather than refusing to boot.
+
+    A typo in an environment variable should not be the difference between a
+    running scam detector and a stack trace, so an unparseable or negative
+    value is logged loudly and the default used instead.
+    """
+    raw = os.environ.get("VANISHIELD_MIN_EVAL_INTERVAL", "").strip()
+    if not raw:
+        return DEFAULT_MIN_EVAL_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "VANISHIELD_MIN_EVAL_INTERVAL=%r is not a number; using %.2fs.",
+            raw, DEFAULT_MIN_EVAL_INTERVAL_SECONDS,
+        )
+        return DEFAULT_MIN_EVAL_INTERVAL_SECONDS
+    if value < 0 or value != value:  # negative, or NaN
+        logger.warning(
+            "VANISHIELD_MIN_EVAL_INTERVAL=%r is not a valid interval; using %.2fs.",
+            raw, DEFAULT_MIN_EVAL_INTERVAL_SECONDS,
+        )
+        return DEFAULT_MIN_EVAL_INTERVAL_SECONDS
+    return value
+
+
+MIN_EVAL_INTERVAL_SECONDS = _eval_interval_from_env()
 
 
 
@@ -206,6 +247,23 @@ app = FastAPI(
 @app.on_event("startup")
 
 async def startup_check():
+
+    # A control PIN that cannot travel in an HTTP header is a silent trap: the
+    # websocket path (JSON) accepts it while REST can never receive it, so the
+    # operator sees a permanent, inexplicable 403 on half the surface. Warn
+    # rather than refuse, since a websocket-only deployment is still coherent.
+    _pin = _configured_control_pin()
+    if _pin:
+        try:
+            _pin.encode("latin-1")
+        except UnicodeEncodeError:
+            logger.warning(
+                "Control PIN contains non-ASCII characters. HTTP headers cannot carry it, "
+                "so %s will always reject it and the blacklist endpoints will be unreachable. "
+                "The websocket observer path will still accept it. Use an ASCII PIN.",
+                CONTROL_PIN_HEADER,
+            )
+
 
     if core_engine is None:
 
