@@ -1,0 +1,1486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VaniShield · Live Call Alert</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Bengali:wght@400;500;600&display=swap">
+    <style>
+        :root {
+            /* Syncing colors and speed dynamically via JS */
+            --alert-h: 140;
+            --hb-duration: 1.8s;
+        }
+
+        /* Latin face first, then Devanagari and Bengali coverage.
+           Without these two the Hindi and Bengali strings render as tofu. */
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+                         "Helvetica Neue", Arial, "Noto Sans Devanagari", "Noto Sans Bengali",
+                         "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+        }
+
+        .bg-spam-alert {
+            background: radial-gradient(120% 120% at 50% -10%, hsl(140, 85%, 25%) 0%, #111113 70%);
+        }
+
+        @keyframes pulse-border {
+            0% { border-color: hsla(var(--alert-h), 85%, 50%, 0.2); }
+            50% { border-color: hsla(var(--alert-h), 85%, 50%, 0.6); }
+            100% { border-color: hsla(var(--alert-h), 85%, 50%, 0.2); }
+        }
+
+        @keyframes heartbeat {
+            0% { transform: scale(1); filter: drop-shadow(0 0 0 hsla(var(--alert-h), 85%, 50%, 0)); }
+            14% { transform: scale(1.03); filter: drop-shadow(0 0 10px hsla(var(--alert-h), 85%, 50%, 0.4)); }
+            28% { transform: scale(1); filter: drop-shadow(0 0 0 hsla(var(--alert-h), 85%, 50%, 0)); }
+            42% { transform: scale(1.03); filter: drop-shadow(0 0 10px hsla(var(--alert-h), 85%, 50%, 0.4)); }
+            70% { transform: scale(1); filter: drop-shadow(0 0 0 hsla(var(--alert-h), 85%, 50%, 0)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 0 hsla(var(--alert-h), 85%, 50%, 0)); }
+        }
+
+        .animate-heartbeat {
+            animation: heartbeat var(--hb-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+
+        .animate-both {
+            animation: heartbeat var(--hb-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite, pulse-border 2s infinite;
+        }
+
+        /* Devanagari and Bengali need more vertical room than Latin at the same
+           size, and the longer strings must not clip inside the ring. */
+        html[lang="hi"] .ring-label,
+        html[lang="bn"] .ring-label {
+            text-transform: none;
+            letter-spacing: 0;
+            font-size: 0.72rem;
+            line-height: 1.15rem;
+            max-width: 9.5rem;
+        }
+        html[lang="hi"] #risk-status,
+        html[lang="bn"] #risk-status {
+            font-size: 1.375rem;
+            line-height: 2.1rem;
+            padding-bottom: 0.1rem;
+        }
+        html[lang="hi"] #explanation,
+        html[lang="bn"] #explanation { line-height: 1.85; }
+        html[lang="hi"] .pill,
+        html[lang="bn"] .pill { line-height: 1.55; }
+        html[lang="hi"] #caller-status,
+        html[lang="bn"] #caller-status { line-height: 1.6; }
+
+        /* A finished call still shows its verdict, but must not be mistaken
+           for a live one: the ring goes static and slightly muted. */
+        #app-container.is-ended #circle-container { filter: saturate(0.8); opacity: 0.92; }
+        #app-container.is-ended #call-timer { opacity: 0.55; }
+        #app-container.is-ended #risk-circle { transition: none; }
+
+        /* Quiet, unobtrusive scroll inside the phone body */
+        .phone-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+        .phone-scroll::-webkit-scrollbar { width: 4px; }
+        .phone-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 9999px; }
+        .phone-scroll::-webkit-scrollbar-track { background: transparent; }
+
+        /* A frightened person should not be hit by motion they did not ask for. */
+        @media (prefers-reduced-motion: reduce) {
+            .animate-heartbeat, .animate-both { animation: none !important; }
+            #risk-circle, #app-container, #circle-container { transition: none !important; }
+        }
+
+        /* Native select on a dark strip */
+        select.vs-field option { background: #18181b; color: #e4e4e7; }
+    </style>
+</head>
+<body class="bg-gray-950 min-h-screen flex flex-col items-center justify-start gap-4 p-4 antialiased text-white overflow-x-hidden">
+
+    <!-- ===================================================================
+         CONTROL STRIP - deliberately OUTSIDE the phone frame.
+         The frame below is a device mock; its inside stays the call screen.
+         =================================================================== -->
+    <div class="w-full max-w-[380px] flex flex-col gap-2">
+        <div class="rounded-2xl border border-gray-800 bg-gray-900/60 p-3 flex flex-col gap-2.5">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-[11px] uppercase tracking-widest text-gray-500 font-semibold">Operator controls</span>
+                <span id="conn-status" class="text-[11px] font-medium text-gray-400 flex items-center gap-1.5">
+                    <i class="fa-solid fa-circle text-[7px] text-gray-600"></i><span id="conn-text">Not connected</span>
+                </span>
+            </div>
+
+            <div id="demo-badge" class="hidden rounded-xl border border-amber-600/60 bg-amber-950/60 px-2.5 py-1.5 text-[11px] font-semibold text-amber-200 flex items-center gap-1.5">
+                <i class="fa-solid fa-flask text-[10px]"></i><span id="demo-badge-text">DEMO — not a real detector</span>
+            </div>
+
+            <button id="btn-answer" type="button"
+                class="w-full px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] transition-all text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+                <i class="fa-solid fa-phone-volume"></i><span id="btn-answer-label">Answer with VaniShield</span>
+            </button>
+
+            <div class="flex items-center gap-2">
+                <label for="caller-input" class="sr-only">Caller number</label>
+                <input id="caller-input" type="tel" inputmode="tel" autocomplete="off" spellcheck="false"
+                    value="+91-9830112233" placeholder="+91-9830112233"
+                    class="vs-field min-w-0 flex-1 px-3 py-2 rounded-xl bg-gray-950 border border-gray-800 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-gray-600" />
+                <button id="btn-set-caller" type="button"
+                    class="shrink-0 px-3 py-2 rounded-xl bg-gray-800 hover:bg-gray-700 active:scale-[0.99] transition-all text-xs font-semibold text-gray-200">
+                    Set caller
+                </button>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <label for="preset-select" class="sr-only">Replay preset</label>
+                <select id="preset-select"
+                    class="vs-field min-w-0 flex-1 px-3 py-2 rounded-xl bg-gray-950 border border-gray-800 text-sm text-gray-200 focus:outline-none focus:border-gray-600">
+                    <option value="en_scam">en_scam · English scam</option>
+                    <option value="en_safe">en_safe · English safe</option>
+                    <option value="bn_scam">bn_scam · Bengali scam</option>
+                    <option value="bn_safe">bn_safe · Bengali safe</option>
+                    <option value="hi_scam">hi_scam · Hindi scam</option>
+                    <option value="hi_safe">hi_safe · Hindi safe</option>
+                </select>
+                <button id="btn-replay" type="button"
+                    class="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] transition-all text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+                    <i class="fa-solid fa-play text-[10px]"></i><span id="btn-replay-label">Replay</span>
+                </button>
+            </div>
+
+            <p id="diag" class="text-[10px] leading-relaxed text-gray-600 font-mono break-words hidden"></p>
+        </div>
+
+        <!-- Device-level notices (mic permission, socket failures) live out here too. -->
+        <div id="notice" class="hidden rounded-2xl border px-3 py-2.5 text-xs leading-relaxed"></div>
+    </div>
+
+    <!-- ===================================================================
+         PHONE FRAME
+         =================================================================== -->
+    <div id="app-container" class="w-full max-w-[380px] h-[800px] bg-spam-alert rounded-[3rem] border-[10px] border-black shadow-2xl relative overflow-hidden flex flex-col p-6 transition-all duration-300">
+
+        <div class="flex justify-between items-center text-sm font-medium text-gray-300 opacity-90 mb-5 pt-2 px-1 shrink-0">
+            <span>9:41</span>
+            <div class="flex items-center gap-1.5 opacity-70">
+                <i class="fa-solid fa-shield-halved text-xs"></i>
+                <span class="tracking-wide">VaniShield</span>
+            </div>
+        </div>
+
+        <div id="demo-strip" class="hidden shrink-0 -mt-2 mb-3 rounded-lg border border-amber-600/50 bg-amber-950/70 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-amber-200 text-center leading-snug">
+            <i class="fa-solid fa-flask mr-1"></i><span id="demo-strip-text">DEMO — not a real detector</span>
+        </div>
+
+        <div class="text-center flex flex-col items-center mb-4 shrink-0">
+            <p id="caller-status" class="text-gray-400 text-sm font-medium mb-1.5 flex items-center justify-center gap-2 flex-wrap transition-colors duration-300">
+                Waiting for call
+            </p>
+            <h1 id="phone-number" class="text-3xl font-semibold tracking-wide mb-2 break-words leading-tight">—</h1>
+            <p id="call-timer" class="text-gray-400 text-sm font-medium tabular-nums">00:00</p>
+        </div>
+
+        <div class="flex justify-center mb-5 relative shrink-0">
+            <div id="circle-container" data-anim-state="none" class="relative w-52 h-52 flex items-center justify-center rounded-full border-4 border-transparent transition-all duration-300">
+                <svg class="w-full h-full absolute transform -rotate-90" viewBox="0 0 200 200">
+                    <circle cx="100" cy="100" r="85" stroke="#2a2a2a" stroke-width="12" fill="none" />
+                    <circle id="risk-circle" cx="100" cy="100" r="85" stroke="#10b981" stroke-width="12" fill="none" stroke-dasharray="534" stroke-dashoffset="534" stroke-linecap="round" class="transition-all duration-75" />
+                </svg>
+
+                <div class="absolute inset-0 flex flex-col items-center justify-center z-10 px-6">
+                    <span id="risk-score" class="text-[4rem] leading-none font-bold text-white mb-0 drop-shadow-md tabular-nums">0</span>
+                    <span id="ring-label" class="ring-label text-gray-300 text-sm font-medium uppercase tracking-widest mt-1 text-center leading-snug">Scam risk</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mb-3 shrink-0">
+            <h2 id="risk-status" class="text-2xl font-semibold text-emerald-400 mb-1.5 drop-shadow-sm transition-colors duration-300 leading-snug break-words">Waiting for call</h2>
+            <p id="listening-line" class="text-gray-400 text-sm leading-snug break-words"></p>
+        </div>
+
+        <!-- The part that changes most during a call. Scrolls so nothing is cut off
+             and the action buttons below can never be pushed out of the frame. -->
+        <div class="flex-1 min-h-0 overflow-y-auto phone-scroll -mx-1 px-1 flex flex-col gap-3">
+
+            <div id="error-banner" class="hidden rounded-2xl border border-red-800/60 bg-red-950/60 px-4 py-3 text-left">
+                <p class="text-[11px] uppercase tracking-widest text-red-300/80 font-semibold mb-1 flex items-center gap-1.5">
+                    <i class="fa-solid fa-circle-exclamation"></i><span id="error-caption">Something went wrong</span>
+                </p>
+                <p id="error-text" class="text-sm text-red-100 leading-relaxed break-words"></p>
+            </div>
+
+            <!-- The sentence a frightened person actually acts on. Never truncated,
+                 and first in the scroll region so it gets the room it needs. -->
+            <p id="explanation" class="hidden text-[15px] leading-relaxed text-gray-200 text-center px-1 break-words"></p>
+
+            <div id="cb-banner" class="hidden rounded-2xl border border-sky-700/60 bg-sky-950/60 px-4 py-3 text-left">
+                <p id="cb-title" class="text-sm font-semibold text-sky-200 flex items-center gap-2 leading-snug">
+                    <i class="fa-solid fa-lock"></i><span>Banking and UPI locked</span>
+                </p>
+                <p id="cb-text" class="text-[13px] text-sky-100/80 leading-relaxed mt-1"></p>
+            </div>
+
+            <div id="synthetic-banner" class="hidden rounded-2xl border border-fuchsia-700/60 bg-fuchsia-950/50 px-4 py-3 text-left">
+                <p id="synthetic-title" class="text-sm font-semibold text-fuchsia-200 flex items-center gap-2 leading-snug">
+                    <i class="fa-solid fa-robot"></i><span>AI-generated voice</span>
+                </p>
+                <p id="demo-voice-note" class="hidden mt-1.5 items-center gap-1.5 rounded-full border border-amber-600/60 bg-amber-950/70 px-2.5 py-1 text-[11px] font-semibold text-amber-200 leading-snug">
+                    <i class="fa-solid fa-flask text-[10px]"></i><span id="demo-voice-note-text">Voice check is a demo stub</span>
+                </p>
+                <p id="synthetic-text" class="text-[13px] text-fuchsia-100/80 leading-relaxed mt-1"></p>
+            </div>
+
+            <div id="tags-container" class="flex justify-center gap-2.5 flex-wrap transition-all duration-300"></div>
+
+            <div class="h-1"></div>
+        </div>
+
+        <div id="live-actions" class="flex justify-center items-center gap-8 mt-4 mb-2 shrink-0">
+            <button id="btn-hangup" type="button" aria-label="Hang up"
+                class="w-16 h-16 bg-[#d93025] rounded-full flex items-center justify-center hover:bg-red-700 active:scale-95 transition-all shadow-[0_0_25px_rgba(217,48,37,0.4)] disabled:opacity-30 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100">
+                <i class="fa-solid fa-phone-slash text-2xl text-white transform -scale-x-100"></i>
+            </button>
+
+            <button id="btn-block" type="button" aria-label="Block this number"
+                class="w-16 h-16 bg-[#202124] rounded-full flex items-center justify-center hover:bg-gray-800 active:scale-95 transition-all border border-gray-700/50 disabled:opacity-30 disabled:cursor-not-allowed disabled:active:scale-100">
+                <i class="fa-solid fa-ban text-xl text-gray-300"></i>
+            </button>
+        </div>
+
+        <div id="ended-actions" class="hidden flex-col items-center gap-2 mt-4 mb-2 shrink-0">
+            <p id="ended-label" class="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Call ended</p>
+            <button id="btn-done" type="button"
+                class="px-10 py-2.5 rounded-full bg-gray-800 hover:bg-gray-700 active:scale-95 transition-all text-sm font-semibold text-gray-100 border border-gray-700/60">
+                Done
+            </button>
+        </div>
+
+        <!-- Blocked confirmation -->
+        <div id="blocked-overlay" class="hidden absolute inset-0 z-20 bg-[#0b0b0d]/95 backdrop-blur-sm flex flex-col items-center justify-center text-center px-8">
+            <div class="w-20 h-20 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center mb-5">
+                <i class="fa-solid fa-ban text-3xl text-gray-300"></i>
+            </div>
+            <h2 id="blocked-title" class="text-2xl font-semibold mb-2 leading-snug">Blocked</h2>
+            <p id="blocked-number" class="text-gray-300 text-lg font-medium mb-3 break-all">—</p>
+            <p id="blocked-body" class="text-gray-400 text-sm leading-relaxed mb-8"></p>
+            <button id="btn-blocked-done" type="button" aria-label="Dismiss"
+                class="px-8 py-2.5 rounded-full bg-gray-800 hover:bg-gray-700 active:scale-95 transition-all text-sm font-semibold text-gray-100">
+                <i class="fa-solid fa-check"></i>
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+    (function () {
+        'use strict';
+
+        /* =============================================================
+           SAFE READERS - every field in a frame may be absent or null.
+           ============================================================= */
+        function obj(v) { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {}; }
+        function arr(v) { return Array.isArray(v) ? v : []; }
+        function num(v, d) {
+            var n = typeof v === 'number' ? v : parseFloat(v);
+            return (typeof n === 'number' && isFinite(n)) ? n : d;
+        }
+        function str(v, d) {
+            if (typeof v === 'string') { var s = v.trim(); if (s) return s; }
+            if (typeof v === 'number' && isFinite(v)) return String(v);
+            return d === undefined ? '' : d;
+        }
+        function bool(v) { return v === true || v === 'true' || v === 1; }
+        function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+        /* =============================================================
+           LANGUAGE
+           The verdict text (band_label, explanation, stage labels and
+           their explanations) arrives already translated in the frame and
+           is rendered straight through. Only the static chrome below is
+           translated on the client, and only with these approved strings.
+           ============================================================= */
+        var I18N = {
+            en: {
+                scamRisk: 'Scam risk',
+                listening: 'Listening · nothing is recorded',
+                incoming: 'Incoming call',
+                waiting: 'Waiting for call',
+                unknownNumber: 'Unknown number',
+                answer: 'Answer with VaniShield',
+                replay: 'Replay',
+                noSigns: 'No scam signs',
+                safetyAdvice: 'Safety advice',
+                aiVoice: 'AI-generated voice',
+                breakerOn: 'Banking and UPI locked',
+                blocked: 'Blocked',
+                reported: 'Reported for fraud',
+                micDenied: 'Microphone access denied',
+                callEnded: 'Call ended',
+                voipSpoofed: 'VoIP spoofed number',
+                lineQuiet: 'Line is quiet · still listening',
+                breakerBody: 'Payments from this phone are paused until the call ends.',
+                aiVoiceBody: 'The voice on this call may not be the person you think it is.',
+                blockedBody: 'This number will not be able to reach you again.',
+                errorCaption: 'Something went wrong',
+                demoBadge: 'DEMO — not a real detector',
+                demoVoiceNote: 'Voice check is a demo stub',
+                done: 'Done'
+            },
+            hi: {
+                scamRisk: 'धोखाधड़ी जोखिम',
+                listening: 'सुन रहे हैं · कुछ रिकॉर्ड नहीं हो रहा',
+                incoming: 'आने वाली कॉल',
+                waiting: 'कॉल की प्रतीक्षा',
+                unknownNumber: 'अज्ञात नंबर',
+                answer: 'वाणीशील्ड के साथ उत्तर दें',
+                replay: 'फिर चलाएँ',
+                noSigns: 'कोई धोखाधड़ी संकेत नहीं',
+                safetyAdvice: 'सुरक्षा सलाह',
+                aiVoice: 'एआई से बनी आवाज़',
+                breakerOn: 'बैंकिंग और यूपीआई लॉक',
+                blocked: 'ब्लॉक किया गया',
+                reported: 'धोखाधड़ी की शिकायत दर्ज',
+                micDenied: 'माइक की अनुमति नहीं मिली',
+                callEnded: 'कॉल समाप्त',
+                voipSpoofed: 'वीओआईपी से बदला नंबर',
+                lineQuiet: 'लाइन शांत · सुन रहे हैं',
+                breakerBody: 'कॉल खत्म होने तक इस फ़ोन से पैसे नहीं भेजे जा सकेंगे।',
+                aiVoiceBody: 'इस कॉल पर जो आवाज़ है, वह वही व्यक्ति नहीं हो सकता जो आप समझ रहे हैं।',
+                blockedBody: 'यह नंबर आपसे दोबारा संपर्क नहीं कर पाएगा।',
+                errorCaption: 'कुछ गड़बड़ हुई',
+                demoBadge: 'डेमो — असली डिटेक्टर नहीं',
+                demoVoiceNote: 'आवाज़ की जाँच डेमो स्टब है',
+                done: 'ठीक है'
+            },
+            bn: {
+                scamRisk: 'প্রতারণার ঝুঁকি',
+                listening: 'শুনছি · কিছুই রেকর্ড হচ্ছে না',
+                incoming: 'আসছে কল',
+                waiting: 'কলের অপেক্ষায়',
+                unknownNumber: 'অজানা নম্বর',
+                answer: 'ভানীশীল্ড দিয়ে ধরুন',
+                replay: 'আবার চালান',
+                noSigns: 'প্রতারণার লক্ষণ নেই',
+                safetyAdvice: 'নিরাপত্তা পরামর্শ',
+                aiVoice: 'এআই-তৈরি কণ্ঠস্বর',
+                breakerOn: 'ব্যাংকিং ও ইউপিআই লক',
+                blocked: 'ব্লক করা হয়েছে',
+                reported: 'প্রতারণার জন্য রিপোর্ট করা',
+                micDenied: 'মাইকের অনুমতি মেলেনি',
+                callEnded: 'কল শেষ',
+                voipSpoofed: 'ভিওআইপি দিয়ে বদলানো নম্বর',
+                lineQuiet: 'লাইন নীরব · শুনছি',
+                breakerBody: 'কল শেষ না হওয়া পর্যন্ত এই ফোন থেকে টাকা পাঠানো বন্ধ।',
+                aiVoiceBody: 'এই কলের কণ্ঠস্বর আপনি যাকে ভাবছেন, তিনি নাও হতে পারেন।',
+                blockedBody: 'এই নম্বর আর আপনার কাছে পৌঁছাতে পারবে না।',
+                errorCaption: 'কিছু সমস্যা হয়েছে',
+                demoBadge: 'ডেমো — আসল ডিটেক্টর নয়',
+                demoVoiceNote: 'কণ্ঠ যাচাই একটি ডেমো স্টাব',
+                done: 'ঠিক আছে'
+            }
+        };
+
+        /* Hover tooltips and last-resort fallbacks only. Everything a
+           frightened person actually reads on the screen now comes from
+           I18N above or from the frame itself, already translated. */
+        var EN_ONLY = {
+            noSignsTitle: 'Nothing in this call matches a known scam pattern yet.',
+            adviceTitle: 'This call sounds like someone warning you about scams, not running one.',
+            engineError: 'The protection engine could not analyse this call.',
+            unreadable: 'The server sent something this screen could not read.'
+        };
+
+        var currentLang = 'en';
+        function normLang(tag) {
+            var l = str(tag).toLowerCase().slice(0, 2);
+            return I18N[l] ? l : 'en';
+        }
+        function t(key) {
+            var table = I18N[currentLang] || I18N.en;
+            return str(table[key], str(I18N.en[key], key));
+        }
+        function isEnglish() { return currentLang === 'en'; }
+
+        /* =============================================================
+           ELEMENTS
+           ============================================================= */
+        var appContainer      = document.getElementById('app-container');
+        var riskScoreElement  = document.getElementById('risk-score');
+        var riskCircle        = document.getElementById('risk-circle');
+        var riskStatusElement = document.getElementById('risk-status');
+        var callerStatusEl    = document.getElementById('caller-status');
+        var circleContainer   = document.getElementById('circle-container');
+        var tagsContainer     = document.getElementById('tags-container');
+        var ringLabel         = document.getElementById('ring-label');
+        var phoneNumberEl     = document.getElementById('phone-number');
+        var callTimerEl       = document.getElementById('call-timer');
+        var listeningLine     = document.getElementById('listening-line');
+        var explanationEl     = document.getElementById('explanation');
+        var errorBanner       = document.getElementById('error-banner');
+        var errorText         = document.getElementById('error-text');
+        var errorCaption      = document.getElementById('error-caption');
+        var demoBadge         = document.getElementById('demo-badge');
+        var demoBadgeText     = document.getElementById('demo-badge-text');
+        var demoStrip         = document.getElementById('demo-strip');
+        var demoStripText     = document.getElementById('demo-strip-text');
+        var demoVoiceNote     = document.getElementById('demo-voice-note');
+        var demoVoiceNoteText = document.getElementById('demo-voice-note-text');
+        var cbBanner          = document.getElementById('cb-banner');
+        var cbTitle           = document.querySelector('#cb-title span');
+        var cbText            = document.getElementById('cb-text');
+        var syntheticBanner   = document.getElementById('synthetic-banner');
+        var syntheticTitle    = document.querySelector('#synthetic-title span');
+        var syntheticText     = document.getElementById('synthetic-text');
+        var blockedOverlay    = document.getElementById('blocked-overlay');
+        var blockedTitle      = document.getElementById('blocked-title');
+        var blockedNumber     = document.getElementById('blocked-number');
+        var blockedBody       = document.getElementById('blocked-body');
+
+        var btnAnswer      = document.getElementById('btn-answer');
+        var btnAnswerLabel = document.getElementById('btn-answer-label');
+        var btnReplay      = document.getElementById('btn-replay');
+        var btnReplayLabel = document.getElementById('btn-replay-label');
+        var btnSetCaller   = document.getElementById('btn-set-caller');
+        var btnHangup      = document.getElementById('btn-hangup');
+        var btnBlock       = document.getElementById('btn-block');
+        var btnBlockedDone = document.getElementById('btn-blocked-done');
+        var liveActions    = document.getElementById('live-actions');
+        var endedActions   = document.getElementById('ended-actions');
+        var endedLabel     = document.getElementById('ended-label');
+        var btnDone        = document.getElementById('btn-done');
+        var callerInput    = document.getElementById('caller-input');
+        var presetSelect   = document.getElementById('preset-select');
+        var connDot        = document.querySelector('#conn-status i');
+        var connText       = document.getElementById('conn-text');
+        var noticeEl       = document.getElementById('notice');
+        var diagEl         = document.getElementById('diag');
+
+        var CIRCUMFERENCE = 534;
+        var PACKET_SAMPLES = 4000;   /* 250 ms at 16 kHz */
+        var TARGET_RATE = 16000;
+        var ANIM_MS = 400;
+
+        var reduceMotionMQ = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+        function reducedMotion() { return !!(reduceMotionMQ && reduceMotionMQ.matches); }
+
+        /* =============================================================
+           STATE
+           ============================================================= */
+        var mode = 'idle';            /* idle | live | replay | review | blocked */
+        var hasVerdict = false;       /* a real risk score has been displayed */
+        var socket = null;
+        var lastFrame = null;
+        var lastPhone = '';
+        var lastCallState = '';
+
+        /* Set from GET /health. Until it answers we assume nothing and show
+           no badge, so an unreachable health endpoint simply means no marker. */
+        var demoMode = false;
+        var acousticUntrained = false;
+        var demoWarning = '';
+
+        /* Audio */
+        var mediaStream = null;
+        var audioCtx = null;
+        var sourceNode = null;
+        var workletNode = null;
+        var scriptNode = null;
+        var silentGain = null;
+        var workletBlobUrl = null;
+        var resample = null;
+        var pendingSamples = [];
+        var pendingCount = 0;
+
+        /* Ring animation */
+        var displayScore = 0;
+        var animFrom = 0;
+        var animTo = 0;
+        var animStart = 0;
+        var animRaf = null;
+
+        /* =============================================================
+           RING / HUE / HEARTBEAT  (visual contract from the prototype)
+           ============================================================= */
+        function animationsAllowed() {
+            return (mode === 'live' || mode === 'replay') && !reducedMotion();
+        }
+
+        function isLive() { return mode === 'live' || mode === 'replay'; }
+
+        function updateRisk(currentScore) {
+            currentScore = clamp(num(currentScore, 0), 0, 100);
+
+            riskScoreElement.textContent = Math.round(currentScore);
+
+            var offset = CIRCUMFERENCE - (currentScore / 100) * CIRCUMFERENCE;
+            riskCircle.style.strokeDashoffset = offset;
+
+            /* Drive Hue to CSS Variables to sync the heartbeat glow color */
+            var hue = Math.max(0, 140 - (currentScore * 1.4));
+            document.documentElement.style.setProperty('--alert-h', hue);
+
+            var centerColor = 'hsl(' + hue + ', 85%, 25%)';
+            appContainer.style.background = 'radial-gradient(120% 120% at 50% -10%, ' + centerColor + ' 0%, #111113 70%)';
+
+            riskCircle.style.stroke = 'hsl(' + hue + ', 85%, 50%)';
+            circleContainer.style.borderColor = 'hsla(' + hue + ', 85%, 50%, 0.2)';
+            riskStatusElement.style.color = 'hsl(' + hue + ', 90%, 65%)';
+
+            /* Calculate dynamic animation speed based on score (50 to 100 range) */
+            if (currentScore >= 50) {
+                var intensity = Math.min(1, (currentScore - 50) / 50);
+                var duration = (1.8 - (intensity * 1.3)).toFixed(2); /* Scales from 1.8s down to 0.5s */
+                document.documentElement.style.setProperty('--hb-duration', duration + 's');
+            }
+
+            /* Determine and apply animation state without resetting CSS mid-frame */
+            var newState = 'none';
+            if (animationsAllowed()) {
+                if (currentScore >= 75) {
+                    newState = 'both';
+                } else if (currentScore >= 50) {
+                    newState = 'heartbeat';
+                }
+            }
+
+            if (circleContainer.dataset.animState !== newState) {
+                circleContainer.dataset.animState = newState;
+                circleContainer.className = 'relative w-52 h-52 flex items-center justify-center rounded-full border-4 border-transparent transition-all duration-300';
+                if (newState === 'both') {
+                    circleContainer.classList.add('animate-both');
+                } else if (newState === 'heartbeat') {
+                    circleContainer.classList.add('animate-heartbeat');
+                }
+            }
+        }
+
+        /* Easing feel carried over from the prototype, now only used to glide
+           between two REAL values over ~400ms. The target is always the last
+           score the backend actually sent. */
+        function ease(t) { return t * (2 - t); }
+
+        function stepRingAnimation(now) {
+            var p = ANIM_MS <= 0 ? 1 : Math.min(1, (now - animStart) / ANIM_MS);
+            displayScore = animFrom + (animTo - animFrom) * ease(p);
+            updateRisk(displayScore);
+            if (p < 1) {
+                animRaf = requestAnimationFrame(stepRingAnimation);
+            } else {
+                animRaf = null;
+                displayScore = animTo;
+                updateRisk(displayScore);
+            }
+        }
+
+        function stopRingAnimation() {
+            if (animRaf !== null) { cancelAnimationFrame(animRaf); animRaf = null; }
+        }
+
+        function setRiskTarget(score) {
+            var target = clamp(num(score, displayScore), 0, 100);
+            if (reducedMotion()) {
+                stopRingAnimation();
+                displayScore = target;
+                updateRisk(displayScore);
+                return;
+            }
+            animFrom = displayScore;
+            animTo = target;
+            animStart = (window.performance && performance.now) ? performance.now() : Date.now();
+            if (animRaf === null) animRaf = requestAnimationFrame(stepRingAnimation);
+        }
+
+        /* =============================================================
+           SMALL UI HELPERS
+           ============================================================= */
+        function show(el) { el.classList.remove('hidden'); }
+        function hide(el) { el.classList.add('hidden'); }
+
+        function setConn(label, tone) {
+            connText.textContent = label;
+            var colors = { live: 'text-emerald-400', wait: 'text-yellow-400', bad: 'text-red-400', off: 'text-gray-600' };
+            connDot.className = 'fa-solid fa-circle text-[7px] ' + (colors[tone] || colors.off);
+        }
+
+        function setNotice(message, tone) {
+            if (!message) { hide(noticeEl); noticeEl.textContent = ''; return; }
+            var tones = {
+                bad: 'rounded-2xl border px-3 py-2.5 text-xs leading-relaxed border-red-800/60 bg-red-950/60 text-red-100',
+                warn: 'rounded-2xl border px-3 py-2.5 text-xs leading-relaxed border-yellow-800/60 bg-yellow-950/50 text-yellow-100',
+                info: 'rounded-2xl border px-3 py-2.5 text-xs leading-relaxed border-gray-800 bg-gray-900/60 text-gray-300'
+            };
+            noticeEl.className = tones[tone] || tones.info;
+            noticeEl.textContent = message;
+            show(noticeEl);
+        }
+
+        /* The backend's phone_number can be far longer than a bare number
+           (it may carry a location and carrier in brackets). Scale the line
+           down rather than let three wrapped lines shove the ring off. */
+        var PHONE_CLASSES = 'font-semibold tracking-wide mb-2 break-words leading-tight';
+        function setPhoneLine(text) {
+            phoneNumberEl.textContent = text;
+            var n = text.length;
+            var size = n > 34 ? 'text-lg' : (n > 22 ? 'text-xl' : 'text-3xl');
+            phoneNumberEl.className = size + ' ' + PHONE_CLASSES;
+        }
+
+        function mmss(totalSeconds) {
+            var s = Math.max(0, Math.floor(num(totalSeconds, 0)));
+            var m = Math.floor(s / 60);
+            var r = s % 60;
+            return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+        }
+
+        function bandKey(band, score) {
+            var b = str(band).toLowerCase();
+            if (b.indexOf('green') >= 0 || b.indexOf('safe') >= 0) return 'green';
+            if (b.indexOf('red') >= 0) return 'red';
+            if (b.indexOf('amber') >= 0 || b.indexOf('yellow') >= 0 || b.indexOf('orange') >= 0) return 'amber';
+            var n = num(score, 0);
+            return n >= 75 ? 'red' : (n >= 50 ? 'amber' : 'green');
+        }
+
+        var PILL_BASE = 'pill px-4 py-2 rounded-full text-sm font-medium shadow-inner border max-w-full break-words text-center';
+        var PILL_TONE = {
+            green: 'bg-emerald-950/50 text-emerald-300 border-emerald-800/50',
+            amber: 'bg-yellow-950/50 text-yellow-300 border-yellow-800/50',
+            red:   'bg-red-950/50 text-red-300 border-red-800/50',
+            advice:'bg-sky-950/50 text-sky-200 border-sky-800/50'
+        };
+
+        function makePill(label, tone, title, iconClass) {
+            var pill = document.createElement('div');
+            pill.className = PILL_BASE + ' ' + (PILL_TONE[tone] || PILL_TONE.amber);
+            if (title) pill.title = title;
+            if (iconClass) {
+                var i = document.createElement('i');
+                i.className = iconClass + ' mr-1.5 text-xs';
+                pill.appendChild(i);
+            }
+            pill.appendChild(document.createTextNode(label));
+            return pill;
+        }
+
+        /* =============================================================
+           CALLER LINE  (built as DOM nodes - frame text is data, never HTML)
+           ============================================================= */
+        function renderCallerStatus(telecom, alertHue) {
+            callerStatusEl.textContent = '';
+
+            var segs = [];
+            var loc = str(telecom.location);
+            var carrier = str(telecom.carrier);
+            var voip = bool(telecom.is_voip_spoofed);
+            var blacklisted = bool(telecom.is_blacklisted);
+
+            if (loc) segs.push({ text: loc });
+            if (carrier) segs.push({ text: carrier });
+            if (voip) segs.push({ text: t('voipSpoofed'), icon: 'fa-solid fa-triangle-exclamation', alert: true });
+            if (blacklisted) segs.push({ text: t('reported'), icon: 'fa-solid fa-ban', alert: true });
+
+            if (!segs.length) {
+                segs.push({ text: mode === 'idle' ? t('waiting') : t('incoming') });
+            }
+
+            for (var i = 0; i < segs.length; i++) {
+                if (i > 0) {
+                    var dot = document.createElement('span');
+                    dot.className = 'opacity-40';
+                    dot.textContent = '·';
+                    callerStatusEl.appendChild(dot);
+                }
+                var wrap = document.createElement('span');
+                wrap.className = 'inline-flex items-center gap-1.5';
+                if (segs[i].title) wrap.title = segs[i].title;
+                if (segs[i].icon) {
+                    var icon = document.createElement('i');
+                    icon.className = segs[i].icon + ' text-xs';
+                    wrap.appendChild(icon);
+                }
+                wrap.appendChild(document.createTextNode(segs[i].text));
+                callerStatusEl.appendChild(wrap);
+            }
+
+            var anyAlert = voip || blacklisted;
+            callerStatusEl.style.color = anyAlert ? 'hsl(' + alertHue + ', 90%, 65%)' : '#9ca3af';
+        }
+
+        /* =============================================================
+           PILLS
+           ============================================================= */
+        function renderTags(stageAnalysis, band) {
+            tagsContainer.textContent = '';
+
+            var sa = obj(stageAnalysis);
+            var stages = arr(sa.stages);
+            var labels = obj(sa.labels);
+            var explanations = arr(sa.explanations);
+            var matches = arr(sa.matches);
+            var tone = bandKey(band, obj(obj(lastFrame).fusion).risk_score);
+
+            /* Safety advice is a different finding, not a weaker scam score. */
+            if (bool(sa.is_awareness_advice)) {
+                var adviceTitle = str(explanations[0], '') || (isEnglish() ? EN_ONLY.adviceTitle : '');
+                tagsContainer.appendChild(makePill(t('safetyAdvice'), 'advice', adviceTitle, 'fa-solid fa-circle-info'));
+                return;
+            }
+
+            if (!stages.length) {
+                if (tone === 'green') {
+                    tagsContainer.appendChild(makePill(t('noSigns'), 'green', isEnglish() ? EN_ONLY.noSignsTitle : ''));
+                }
+                return;
+            }
+
+            for (var i = 0; i < stages.length; i++) {
+                var code = str(stages[i]);
+                if (!code) continue;
+                /* Labels and explanations arrive already in the caller's language. */
+                var label = str(labels[code], code);
+                var title = str(explanations[i], '');
+                if (!title) {
+                    for (var m = 0; m < matches.length; m++) {
+                        if (str(obj(matches[m]).stage) === code) {
+                            title = str(obj(matches[m]).text, '') || str(obj(matches[m]).label, '');
+                            break;
+                        }
+                    }
+                }
+                tagsContainer.appendChild(makePill(label, tone, title));
+            }
+        }
+
+        /* =============================================================
+           STATIC CHROME  (re-rendered whenever the call's language changes)
+           ============================================================= */
+        function renderLineState() {
+            if (mode === 'idle') { listeningLine.textContent = ''; return; }
+            if (mode === 'review' || lastCallState === 'ENDED') { listeningLine.textContent = t('callEnded'); }
+            else if (lastCallState === 'LINE_MUTED_OR_SILENT') { listeningLine.textContent = t('lineQuiet'); }
+            else { listeningLine.textContent = t('listening'); }
+        }
+
+        function renderStaticChrome() {
+            ringLabel.textContent = t('scamRisk');
+            btnReplayLabel.textContent = t('replay');
+            btnAnswerLabel.textContent = t('answer');
+
+            cbTitle.textContent = t('breakerOn');
+            cbText.textContent = t('breakerBody');
+
+            syntheticTitle.textContent = t('aiVoice');
+            syntheticText.textContent = t('aiVoiceBody');
+
+            blockedTitle.textContent = t('blocked');
+            blockedBody.textContent = t('blockedBody');
+            errorCaption.textContent = t('errorCaption');
+            endedLabel.textContent = t('callEnded');
+            btnDone.textContent = t('done');
+            renderDemoMarkers();
+
+            renderLineState();
+
+            if (mode === 'idle') {
+                riskStatusElement.textContent = t('waiting');
+                renderCallerStatus({}, 140);
+                return;
+            }
+
+            /* Re-render the frame-driven bits that embed chrome strings. */
+            var frame = obj(lastFrame);
+            var fusion = obj(frame.fusion);
+            var hue = Math.max(0, 140 - (clamp(displayScore, 0, 100) * 1.4));
+            renderCallerStatus(obj(frame.telecom), hue);
+            renderTags(frame.stage_analysis, fusion.band);
+            if (!str(frame.telecom && frame.telecom.phone_number) && !lastPhone) {
+                setPhoneLine(t('unknownNumber'));
+            }
+        }
+
+        /* The acoustic pillar can be a heuristic stub rather than a trained
+           detector. A screenshot of this phone must never be able to pass as a
+           real detection, so the marker sits inside the frame too, and the
+           "AI-generated voice" banner - the only claim resting entirely on
+           that pillar - carries its own note. The ring, pills and verdict come
+           from the stage pillar, which is real, and stay unmarked. */
+        function renderDemoMarkers() {
+            demoBadgeText.textContent = t('demoBadge');
+            demoStripText.textContent = t('demoBadge');
+            demoVoiceNoteText.textContent = t('demoVoiceNote');
+            if (demoWarning) {
+                demoBadge.title = demoWarning;
+                demoStrip.title = demoWarning;
+                demoVoiceNote.title = demoWarning;
+            }
+            demoBadge.classList.toggle('hidden', !demoMode);
+            demoStrip.classList.toggle('hidden', !demoMode);
+            /* Gated on the pillar itself, not on demo mode in general. */
+            demoVoiceNote.classList.toggle('hidden', !acousticUntrained);
+            demoVoiceNote.classList.toggle('inline-flex', acousticUntrained);
+        }
+
+        function loadHealth() {
+            if (!window.fetch) return;
+            var req;
+            try { req = fetch('/health', { cache: 'no-store' }); }
+            catch (e) { return; }
+            req.then(function (res) {
+                if (!res || !res.ok) throw new Error('health ' + (res && res.status));
+                return res.json();
+            }).then(function (health) {
+                var h = obj(health);
+                var pillar = obj(h.acoustic_pillar);
+                demoMode = bool(h.demo_mode);
+                acousticUntrained = (pillar.trained === false) || (pillar.is_trained === false);
+                demoWarning = str(pillar.warning);
+                renderDemoMarkers();
+            }).catch(function () {
+                /* No health endpoint, no badge, no crash. */
+                demoMode = false;
+                acousticUntrained = false;
+                renderDemoMarkers();
+            });
+        }
+
+        /* DECISION, not an oversight: the screen keeps the last caller's
+           language when it returns to idle. A household's language does not
+           change between calls, and snapping back to English would show the
+           wrong language for the moment before the next call's first frame
+           lands. Only the very first load starts in English. */
+        function applyLanguage(tag, force) {
+            var lang = normLang(tag);
+            if (!force && lang === currentLang) return;
+            currentLang = lang;
+            document.documentElement.lang = lang;
+            renderStaticChrome();
+        }
+
+        /* =============================================================
+           FRAME HANDLING
+           ============================================================= */
+        /* Kept across a teardown: a server that reports an error and closes
+           immediately must not have its message wiped by the reset. */
+        var lastError = '';
+
+        function surfaceError(message) {
+            lastError = message;
+            errorText.textContent = message;
+            show(errorBanner);
+        }
+
+        function clearError() {
+            lastError = '';
+            hide(errorBanner);
+            errorText.textContent = '';
+        }
+
+        function renderDiag(frame) {
+            var fusion = obj(frame.fusion);
+            var ac = obj(frame.acoustic);
+            var sa = obj(frame.stage_analysis);
+            var bits = [];
+            if (str(frame.session_id)) bits.push(str(frame.session_id));
+            if (str(frame.lang)) bits.push('lang ' + str(frame.lang));
+            if (num(frame.latency_ms, null) !== null) bits.push(num(frame.latency_ms, 0).toFixed(1) + 'ms');
+            if (str(frame.call_state)) bits.push(str(frame.call_state));
+            if (num(sa.stage_count, null) !== null) bits.push('stages ' + num(sa.stage_count, 0) + '/' + num(sa.stage_total, 0));
+            if (num(ac.ema, null) !== null) bits.push('ema ' + num(ac.ema, 0).toFixed(2) + ' / thr ' + num(ac.threshold, 0).toFixed(2));
+            if (num(ac.window_count, null) !== null) bits.push('win ' + num(ac.window_count, 0));
+            if (str(fusion.hard_rule)) bits.push('rule ' + str(fusion.hard_rule));
+            if (num(sa.amount_inr, null) !== null && num(sa.amount_inr, 0) > 0) bits.push('INR ' + num(sa.amount_inr, 0));
+            if (bool(sa.payment_attempt)) bits.push('payment attempt');
+            if (bool(sa.high_sensitivity_credential)) bits.push('credential ask');
+            if (!bits.length) { hide(diagEl); diagEl.textContent = ''; return; }
+            diagEl.textContent = bits.join('  ·  ');
+            show(diagEl);
+        }
+
+        function handleFrame(raw) {
+            var frame = obj(raw);
+            lastFrame = frame;
+
+            /* Follow the language the caller is actually speaking. */
+            applyLanguage(frame.lang);
+
+            /* An error frame must say what went wrong, not blank the screen. */
+            if (str(frame.status).toLowerCase() === 'error' || str(frame.error)) {
+                surfaceError(
+                    str(frame.error) || str(frame.message) || str(frame.detail) || EN_ONLY.engineError
+                );
+            } else {
+                clearError();
+            }
+
+            var fusion = obj(frame.fusion);
+            var telecom = obj(frame.telecom);
+            var acoustic = obj(frame.acoustic);
+            var breaker = obj(frame.circuit_breaker);
+            var callState = str(frame.call_state).toUpperCase();
+            lastCallState = callState;
+
+            /* --- Risk ring / hue / heartbeat --- */
+            var score = num(fusion.risk_score, null);
+            if (score !== null) { setRiskTarget(score); hasVerdict = true; }
+            var hue = Math.max(0, 140 - (clamp(score === null ? displayScore : score, 0, 100) * 1.4));
+
+            /* --- Status line (already translated by the backend) --- */
+            var bandLabel = str(fusion.band_label);
+            if (bandLabel) {
+                riskStatusElement.textContent = bandLabel;
+            } else if (score !== null) {
+                riskStatusElement.textContent = t('incoming');
+            }
+
+            /* --- Caller context --- */
+            renderCallerStatus(telecom, hue);
+
+            var phone = str(telecom.phone_number);
+            if (phone) {
+                setPhoneLine(phone);
+                lastPhone = phone;
+            } else if (!lastPhone) {
+                setPhoneLine(t('unknownNumber'));
+            }
+
+            /* --- Timer --- */
+            if (num(frame.elapsed_sec, null) !== null) {
+                callTimerEl.textContent = mmss(frame.elapsed_sec);
+            }
+
+            /* --- Line state --- */
+            renderLineState();
+
+            /* --- The sentence that matters (already translated) --- */
+            var explanation = str(frame.explanation);
+            if (explanation) {
+                explanationEl.textContent = explanation;
+                show(explanationEl);
+            } else {
+                hide(explanationEl);
+                explanationEl.textContent = '';
+            }
+
+            /* --- Pills --- */
+            renderTags(frame.stage_analysis, fusion.band);
+
+            /* --- Circuit breaker: protective, not alarming --- */
+            if (bool(breaker.engaged)) {
+                show(cbBanner);
+            } else {
+                hide(cbBanner);
+            }
+
+            /* --- Cloned voice is a separate finding from a scam script --- */
+            if (bool(acoustic.synthetic)) { show(syntheticBanner); } else { hide(syntheticBanner); }
+
+            renderDiag(frame);
+
+            if (callState === 'ENDED') {
+                enterReview();
+            }
+        }
+
+        /* =============================================================
+           IDLE / LIVE STATE
+           ============================================================= */
+        function setButtons() {
+            var liveish = isLive();
+            btnHangup.disabled = !liveish;
+            btnBlock.disabled = !liveish;
+            btnAnswer.disabled = liveish;
+            btnReplay.disabled = liveish;
+
+            var ended = (mode === 'review');
+            liveActions.classList.toggle('hidden', ended);
+            liveActions.classList.toggle('flex', !ended);
+            endedActions.classList.toggle('hidden', !ended);
+            endedActions.classList.toggle('flex', ended);
+        }
+
+        /* A finished call keeps its verdict on screen - the number, the ring
+           colour, the band label, the pills and the sentence - until the
+           person chooses to clear it. Right after hanging up on a scammer is
+           exactly when someone wants to know what just happened. */
+        function enterReview() {
+            stopMic();
+            closeSocket();
+            stopRingAnimation();
+            mode = 'review';
+            appContainer.classList.add('is-ended');
+            updateRisk(displayScore);   /* re-render with the animations off */
+            renderLineState();
+            setConn('Call ended', 'off');
+            setButtons();
+        }
+
+        function resetToIdle() {
+            mode = 'idle';
+            lastFrame = null;
+            lastCallState = '';
+            lastPhone = '';
+            hasVerdict = false;
+            appContainer.classList.remove('is-ended');
+            hide(blockedOverlay);
+
+            stopRingAnimation();
+            displayScore = 0;
+            updateRisk(0);
+
+            riskStatusElement.style.color = '';
+            riskStatusElement.className = 'text-2xl font-semibold text-emerald-400 mb-1.5 drop-shadow-sm transition-colors duration-300 leading-snug break-words';
+            setPhoneLine('—');
+            callTimerEl.textContent = '00:00';
+
+            var keepError = lastError;
+            clearError();
+            if (keepError) {
+                lastError = keepError;
+                errorText.textContent = keepError;
+                show(errorBanner);
+            }
+            hide(cbBanner);
+            hide(syntheticBanner);
+            hide(explanationEl);
+            explanationEl.textContent = '';
+            tagsContainer.textContent = '';
+            hide(diagEl);
+            diagEl.textContent = '';
+
+            setConn('Not connected', 'off');
+            renderStaticChrome();
+            setButtons();
+        }
+
+        /* =============================================================
+           WEBSOCKET
+           ============================================================= */
+        function wsBase() {
+            var host = location.host;
+            if (!host) return null;   /* opened from file:// - no server to reach */
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return proto + '//' + host;
+        }
+
+        function closeSocket() {
+            if (!socket) return;
+            var s = socket;
+            socket = null;
+            s.onopen = s.onmessage = s.onerror = s.onclose = null;
+            try {
+                if (s.readyState === WebSocket.OPEN || s.readyState === WebSocket.CONNECTING) s.close();
+            } catch (e) { /* already gone */ }
+        }
+
+        function sendAction(action, extra) {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+            var payload = { action: action };
+            if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) payload[k] = extra[k]; } }
+            try { socket.send(JSON.stringify(payload)); return true; }
+            catch (e) { return false; }
+        }
+
+        function openSocket(path, nextMode, onOpen) {
+            var base = wsBase();
+            if (!base) {
+                setNotice('This screen needs to be served by the VaniShield server. Open it at /static/call-screen.html instead of from a local file.', 'bad');
+                return;
+            }
+
+            closeSocket();
+            hasVerdict = false;
+            appContainer.classList.remove('is-ended');
+            mode = nextMode;
+            setButtons();
+            setConn('Connecting…', 'wait');
+            setNotice('');
+            clearError();
+
+            var s;
+            try {
+                s = new WebSocket(base + path);
+            } catch (e) {
+                resetToIdle();
+                setNotice('Could not reach the VaniShield server.', 'bad');
+                return;
+            }
+            s.binaryType = 'arraybuffer';
+            socket = s;
+
+            s.onopen = function () {
+                if (socket !== s) return;
+                setConn(nextMode === 'replay' ? 'Replaying' : 'Live', 'live');
+                lastCallState = 'ACTIVE';
+                renderLineState();
+                riskStatusElement.textContent = t('incoming');
+                /* Only the live-call socket reads client actions; the replay
+                   stream is send-only, so do not talk into it. */
+                var typed = str(callerInput.value);
+                if (nextMode === 'live' && typed) sendAction('SET_CALLER', { phone: typed });
+                if (onOpen) onOpen();
+            };
+
+            s.onmessage = function (ev) {
+                if (socket !== s) return;
+                if (typeof ev.data !== 'string') return;   /* frames are JSON text */
+                var parsed;
+                try { parsed = JSON.parse(ev.data); }
+                catch (e) { surfaceError(EN_ONLY.unreadable); return; }
+                handleFrame(parsed);
+            };
+
+            s.onerror = function () {
+                if (socket !== s) return;
+                setConn('Connection error', 'bad');
+                setNotice('The connection to the VaniShield server failed.', 'bad');
+            };
+
+            s.onclose = function () {
+                if (socket !== s) return;
+                socket = null;
+                stopMic();
+                /* The server closes right after its last frame; a review or a
+                   blocked screen has already been set up and must survive. */
+                if (mode === 'blocked' || mode === 'review') return;
+                var hadCall = isLive();
+                var failed = lastError;
+                if (hadCall && hasVerdict && !failed) {
+                    enterReview();
+                    return;
+                }
+                resetToIdle();
+                if (failed) setNotice(failed, 'bad');
+                else if (hadCall) setNotice(t('callEnded'), 'info');
+            };
+        }
+
+        /* =============================================================
+           MICROPHONE  ->  16 kHz mono int16 LE, ~250 ms packets
+           ============================================================= */
+        var WORKLET_SRC = [
+            'class VaniPcmCapture extends AudioWorkletProcessor {',
+            '  process(inputs) {',
+            '    const input = inputs[0];',
+            '    const channel = input && input[0];',
+            '    if (channel && channel.length) {',
+            '      const copy = new Float32Array(channel.length);',
+            '      copy.set(channel);',
+            '      this.port.postMessage(copy, [copy.buffer]);',
+            '    }',
+            '    return true;',
+            '  }',
+            '}',
+            'registerProcessor("vani-pcm-capture", VaniPcmCapture);'
+        ].join('\n');
+
+        /* Linear resampler that keeps its fractional position across chunks,
+           so joins between packets do not click. */
+        function makeResampler(inRate, outRate) {
+            if (!(inRate > 0) || !(outRate > 0) || inRate === outRate) {
+                return function (chunk) { return chunk; };
+            }
+            var ratio = inRate / outRate;
+            var tail = new Float32Array(0);
+            var pos = 0;
+            return function (chunk) {
+                var buf = new Float32Array(tail.length + chunk.length);
+                buf.set(tail, 0);
+                buf.set(chunk, tail.length);
+
+                var outLen = 0;
+                var probe = pos;
+                while (Math.floor(probe) + 1 < buf.length) { outLen++; probe += ratio; }
+
+                var out = new Float32Array(outLen);
+                var i = pos, w = 0;
+                while (Math.floor(i) + 1 < buf.length) {
+                    var i0 = Math.floor(i);
+                    var frac = i - i0;
+                    out[w++] = buf[i0] * (1 - frac) + buf[i0 + 1] * frac;
+                    i += ratio;
+                }
+
+                var keepFrom = Math.min(Math.floor(i), buf.length);
+                tail = buf.slice(keepFrom);
+                pos = i - keepFrom;
+                return out;
+            };
+        }
+
+        function flushPackets() {
+            while (pendingCount >= PACKET_SAMPLES) {
+                var packet = new Float32Array(PACKET_SAMPLES);
+                var filled = 0;
+                while (filled < PACKET_SAMPLES) {
+                    var head = pendingSamples[0];
+                    var need = PACKET_SAMPLES - filled;
+                    if (head.length <= need) {
+                        packet.set(head, filled);
+                        filled += head.length;
+                        pendingSamples.shift();
+                    } else {
+                        packet.set(head.subarray(0, need), filled);
+                        pendingSamples[0] = head.subarray(need);
+                        filled += need;
+                    }
+                }
+                pendingCount -= PACKET_SAMPLES;
+
+                /* float32 -> 16-bit signed little-endian, explicitly. */
+                var bytes = new ArrayBuffer(PACKET_SAMPLES * 2);
+                var view = new DataView(bytes);
+                for (var i = 0; i < PACKET_SAMPLES; i++) {
+                    var s = packet[i];
+                    s = s < -1 ? -1 : (s > 1 ? 1 : s);
+                    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+                }
+
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    try { socket.send(bytes); } catch (e) { /* socket closing */ }
+                }
+            }
+        }
+
+        function pushSamples(float32Chunk) {
+            if (!float32Chunk || !float32Chunk.length) return;
+            var resampled = resample ? resample(float32Chunk) : float32Chunk;
+            if (!resampled.length) return;
+            pendingSamples.push(resampled);
+            pendingCount += resampled.length;
+            flushPackets();
+        }
+
+        function stopMic() {
+            if (workletNode) {
+                try { workletNode.port.onmessage = null; workletNode.disconnect(); } catch (e) {}
+                workletNode = null;
+            }
+            if (scriptNode) {
+                try { scriptNode.onaudioprocess = null; scriptNode.disconnect(); } catch (e) {}
+                scriptNode = null;
+            }
+            if (sourceNode) { try { sourceNode.disconnect(); } catch (e) {} sourceNode = null; }
+            if (silentGain) { try { silentGain.disconnect(); } catch (e) {} silentGain = null; }
+            if (mediaStream) {
+                var tracks = mediaStream.getTracks ? mediaStream.getTracks() : [];
+                for (var i = 0; i < tracks.length; i++) { try { tracks[i].stop(); } catch (e) {} }
+                mediaStream = null;
+            }
+            if (audioCtx) {
+                var ctx = audioCtx;
+                audioCtx = null;
+                try { if (ctx.state !== 'closed') ctx.close(); } catch (e) {}
+            }
+            if (workletBlobUrl) { try { URL.revokeObjectURL(workletBlobUrl); } catch (e) {} workletBlobUrl = null; }
+            resample = null;
+            pendingSamples = [];
+            pendingCount = 0;
+        }
+
+        function startMic() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setNotice('This browser cannot reach the microphone. Use Replay to see the screen without one.', 'bad');
+                return Promise.reject(new Error('getUserMedia unavailable'));
+            }
+
+            return navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: TARGET_RATE,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                },
+                video: false
+            }).then(function (stream) {
+                mediaStream = stream;
+
+                var Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) throw new Error('AudioContext unavailable');
+
+                try { audioCtx = new Ctx({ sampleRate: TARGET_RATE }); }
+                catch (e) { audioCtx = new Ctx(); }
+
+                /* The browser may ignore the 16 kHz hint - downsample from whatever it gave us. */
+                resample = makeResampler(audioCtx.sampleRate, TARGET_RATE);
+                sourceNode = audioCtx.createMediaStreamSource(stream);
+
+                var resumed = (audioCtx.state === 'suspended' && audioCtx.resume)
+                    ? audioCtx.resume().catch(function () {})
+                    : Promise.resolve();
+
+                return resumed.then(function () {
+                    if (audioCtx && audioCtx.audioWorklet && typeof URL.createObjectURL === 'function') {
+                        try {
+                            workletBlobUrl = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }));
+                            return audioCtx.audioWorklet.addModule(workletBlobUrl).then(function () {
+                                workletNode = new AudioWorkletNode(audioCtx, 'vani-pcm-capture');
+                                workletNode.port.onmessage = function (ev) {
+                                    if (ev && ev.data) pushSamples(ev.data);
+                                };
+                                sourceNode.connect(workletNode);
+                                /* Keep the graph pulling without making the mic audible. */
+                                silentGain = audioCtx.createGain();
+                                silentGain.gain.value = 0;
+                                workletNode.connect(silentGain);
+                                silentGain.connect(audioCtx.destination);
+                            });
+                        } catch (e) { /* fall through to ScriptProcessor */ }
+                    }
+                    return Promise.reject(new Error('worklet-unavailable'));
+                }).catch(function () {
+                    /* Fallback only when AudioWorklet is genuinely unavailable. */
+                    if (!audioCtx || !audioCtx.createScriptProcessor) throw new Error('No audio capture path available');
+                    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+                    scriptNode.onaudioprocess = function (ev) {
+                        var channel = ev.inputBuffer.getChannelData(0);
+                        var copy = new Float32Array(channel.length);
+                        copy.set(channel);
+                        pushSamples(copy);
+                    };
+                    sourceNode.connect(scriptNode);
+                    silentGain = audioCtx.createGain();
+                    silentGain.gain.value = 0;
+                    scriptNode.connect(silentGain);
+                    silentGain.connect(audioCtx.destination);
+                });
+            }).catch(function (err) {
+                stopMic();
+                var name = err && err.name ? err.name : '';
+                if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') {
+                    setNotice(t('micDenied') + (isEnglish() ? ' · VaniShield cannot listen until you allow the microphone for this page. Use Replay to see the screen without one.' : ''), 'bad');
+                } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+                    setNotice('No microphone found on this device. Use Replay to see the screen without one.', 'bad');
+                } else {
+                    setNotice('Could not start the microphone' + (err && err.message ? ' (' + err.message + ')' : '') + '. Use Replay to see the screen without one.', 'bad');
+                }
+                throw err;
+            });
+        }
+
+        /* =============================================================
+           CALL LIFECYCLE
+           ============================================================= */
+        function endCall(opts) {
+            opts = opts || {};
+            if (opts.sendEnd !== false) sendAction('END_CALL');
+            stopMic();
+            closeSocket();
+            stopRingAnimation();
+            resetToIdle();
+            if (opts.reason) setNotice(opts.reason, opts.tone || 'info');
+        }
+
+        function answerWithVaniShield() {
+            if (mode === 'live' || mode === 'replay') return;
+            var phone = str(callerInput.value);
+            var query = phone ? ('?phone=' + encodeURIComponent(phone)) : '';
+            setNotice('');
+
+            startMic().then(function () {
+                if (phone) { setPhoneLine(phone); lastPhone = phone; }
+                openSocket('/ws/live-call' + query, 'live');
+            }).catch(function () {
+                btnAnswerLabel.textContent = t('answer');
+                mode = 'idle';
+                setButtons();
+            });
+        }
+
+        function startReplay() {
+            if (mode === 'live' || mode === 'replay') return;
+            var preset = str(presetSelect.value, 'en_scam');
+            stopRingAnimation();
+            displayScore = 0;
+            updateRisk(0);
+            openSocket('/ws/replay/' + encodeURIComponent(preset), 'replay');
+        }
+
+        function blockCaller() {
+            if (mode !== 'live' && mode !== 'replay') return;
+            sendAction('BLOCK_CALLER');
+            sendAction('END_CALL');
+
+            mode = 'blocked';
+            stopMic();
+            stopRingAnimation();
+            /* Kill the heartbeat but keep the number the person just blocked. */
+            updateRisk(displayScore);
+            blockedNumber.textContent = lastPhone || str(callerInput.value, t('unknownNumber'));
+            show(blockedOverlay);
+            setConn('Caller blocked', 'off');
+            setButtons();
+
+            /* Give the action a moment to reach the server, then drop the line. */
+            window.setTimeout(function () { closeSocket(); }, 250);
+        }
+
+        /* =============================================================
+           WIRING
+           ============================================================= */
+        btnAnswer.addEventListener('click', answerWithVaniShield);
+        btnReplay.addEventListener('click', startReplay);
+
+        btnSetCaller.addEventListener('click', function () {
+            var phone = str(callerInput.value);
+            if (!phone) { setNotice('Type a caller number first.', 'warn'); return; }
+            if (sendAction('SET_CALLER', { phone: phone })) {
+                setNotice('Caller set to ' + phone + '.', 'info');
+            } else {
+                setNotice('Saved. ' + phone + ' will be used when the next call starts.', 'info');
+            }
+            if (mode === 'idle') setPhoneLine(phone);
+            lastPhone = phone;
+        });
+
+        callerInput.addEventListener('keydown', function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); btnSetCaller.click(); }
+        });
+
+        btnHangup.addEventListener('click', function () {
+            if (!isLive()) return;
+            sendAction('END_CALL');
+            if (hasVerdict) { enterReview(); return; }
+            endCall({ sendEnd: false, reason: t('callEnded'), tone: 'info' });
+        });
+
+        btnDone.addEventListener('click', function () {
+            resetToIdle();
+            setNotice('');
+        });
+
+        btnBlock.addEventListener('click', blockCaller);
+
+        btnBlockedDone.addEventListener('click', function () {
+            hide(blockedOverlay);
+            closeSocket();
+            stopMic();
+            /* Do not throw the verdict away: fall back to the finished-call
+               screen, and let the person clear it from there. */
+            if (hasVerdict) { enterReview(); return; }
+            resetToIdle();
+        });
+
+        if (reduceMotionMQ && reduceMotionMQ.addEventListener) {
+            reduceMotionMQ.addEventListener('change', function () {
+                stopRingAnimation();
+                updateRisk(displayScore);
+            });
+        }
+
+        window.addEventListener('beforeunload', function () {
+            sendAction('END_CALL');
+            stopMic();
+            closeSocket();
+        });
+
+        /* Idle on load: English chrome, ring at zero, no fabricated score,
+           both call buttons inert. */
+        applyLanguage('en', true);
+        resetToIdle();
+        loadHealth();
+    })();
+    </script>
+</body>
+</html>

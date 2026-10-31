@@ -108,6 +108,10 @@ except ImportError:
     faiss = None
     FAISS_AVAILABLE = False
 
+import scam_stages
+from scam_stages import classify_stages, fuse_risk, explain as explain_verdict
+from demo_backend import DEMO_BANNER, DEMO_ENV_VAR, DemoAcousticScorer, demo_enabled
+
 
 
 logger = logging.getLogger("vanishield_engine")
@@ -269,6 +273,126 @@ CITY_COORDINATES = {
 
 
 
+def acoustic_ema(series, alpha: float = 0.5) -> float:
+    """
+    Exponential moving average over per-window synthetic-voice probabilities.
+
+    Seeded with the first value rather than with zero, so a single-window clip
+    reports that window's own score instead of half of it.
+    """
+    ema = None
+    for value in series or []:
+        v = float(value)
+        ema = v if ema is None else (ema * (1.0 - alpha) + v * alpha)
+    return round(ema if ema is not None else 0.0, 4)
+
+
+def _synth_events(analysis, fusion: dict, breaker_engaged: bool, lang: str = "en") -> list:
+    """
+    Builds the event list for a one-shot evaluation.
+
+    A file upload has no timeline, so every event carries t=0.0. Live calls get
+    properly timestamped events from `call_session.CallSession` instead; this
+    exists so the dashboard's event log is populated identically either way.
+    """
+    events = []
+
+    def add(kind: str, severity: str, key: str, **fields):
+        events.append({
+            "t": 0.0,
+            "kind": kind,
+            "severity": severity,
+            "lang": lang,
+            "text": scam_stages.event_text(key, lang, **fields),
+        })
+
+    for stage in analysis.stages:
+        label = scam_stages.stage_label(stage, lang)
+        quote = next((m.text for m in analysis.matches if m.stage == stage), "")
+        text = scam_stages.event_text("stage_detected", lang, label=label)
+        if quote:
+            text = f'{text} · "{quote}"'
+        events.append({
+            "t": 0.0, "kind": "stage", "severity": "danger", "lang": lang, "text": text,
+        })
+
+    if analysis.is_awareness_advice:
+        add("stage", "success", "awareness_ignored")
+
+    if analysis.payment_attempt:
+        if analysis.amount_inr:
+            add("payment", "warning", "payment_amount", amount=f"{analysis.amount_inr:,.0f}")
+        else:
+            add("payment", "warning", "payment")
+
+    if fusion.get("acoustic_prob", 0.0) >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD:
+        add("acoustic", "danger", "synthetic",
+            pct=round(fusion["acoustic_prob"] * 100.0, 1))
+
+    rule = fusion.get("hard_rule")
+    if rule:
+        add("risk", "danger", "hard_rule", rule=rule)
+
+    band = fusion.get("band")
+    score = fusion.get("risk_score", 0.0)
+    if band == scam_stages.BAND_RED:
+        add("risk", "danger", "risk_state_red", score=score)
+    elif band == scam_stages.BAND_AMBER:
+        add("risk", "warning", "risk_state_amber", score=score)
+    else:
+        add("risk", "success", "risk_state_green", score=score)
+
+    if breaker_engaged:
+        add("breaker", "danger", "breaker")
+
+    return events
+
+
+def threat_type_from_fusion(fusion: dict, stages, acoustic_prob: float) -> str:
+    """
+    Names the threat consistently with the fused score.
+
+    The threshold ladder derives its own `threat_type`, but once the reported
+    score comes from the fusion the two can contradict each other — a call the
+    fusion calls green was still being labelled AI_VOICE_CLONE, which is worse
+    than useless on a badge the user reads. The vocabulary is unchanged so
+    existing clients keep working; only the derivation moves.
+    """
+    if fusion.get("hard_rule") == "KNOWN_SCAMMER_NUMBER":
+        return "BLACKLISTED_SCAMMER"
+
+    synthetic = acoustic_prob >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD
+    demands_money = scam_stages.CREDENTIAL in (stages or [])
+    band = fusion.get("band")
+
+    if band == scam_stages.BAND_GREEN:
+        return "AUTHENTIC_SAFE_CALL"
+    if synthetic and demands_money:
+        return "AI_CLONE_AND_FINANCIAL_SCAM"
+    if synthetic:
+        return "AI_VOICE_CLONE"
+    if demands_money:
+        return "FINANCIAL_SCAM"
+    return "SUSPICIOUS_UNVERIFIED_CALL"
+
+
+def _empty_stage_payload(lang: str = "en") -> dict:
+    """Stage-pillar shape for frames with no speech, so clients need no guards."""
+    return {
+        "stages": [],
+        "stage_count": 0,
+        "stage_total": len(scam_stages.STAGE_ORDER),
+        "matches": [],
+        "labels": scam_stages.stage_labels(lang),
+        "explanations": [],
+        "lang": scam_stages.normalize_lang(lang),
+        "is_awareness_advice": False,
+        "payment_attempt": False,
+        "amount_inr": None,
+        "high_sensitivity_credential": False,
+    }
+
+
 class UnifiedMultilingualVoiceNet(nn.Module):
 
     def __init__(self, jev_dim=3840, w2v_model_path=None):
@@ -334,38 +458,40 @@ class VaniShieldCore:
 
 
         active_checkpoint = checkpoint_path or W2V_CHECKPOINT
-
-        if not active_checkpoint or not os.path.exists(os.path.join(active_checkpoint, "config.json")):
-
-            raise RuntimeError(
-
-                f"Missing trained Wav2Vec 2.0 checkpoint at '{active_checkpoint}'. "
-
-                "VaniShield requires trained weights to provide genuine voice-clone detection. "
-
-                "Please provide a fine-tuned checkpoint (e.g. in results_master_unified or via VANISHIELD_CHECKPOINT)."
-
-            )
-
-
-
-        # 1. Feature Extractor
-
-        self.fe = AutoFeatureExtractor.from_pretrained(
-
-            active_checkpoint,
-
-            local_files_only=True
-
+        self.demo_scorer = None
+        self.jev_head_trained = False
+        has_checkpoint = bool(
+            active_checkpoint and os.path.exists(os.path.join(active_checkpoint, "config.json"))
         )
 
+        if not has_checkpoint:
+            # No trained detector. Refuse by default - a voice-clone detector
+            # that has not been trained is worse than none at all, because the
+            # user believes it. Demo mode is the single, explicit exception and
+            # has to be asked for by environment variable.
+            if not demo_enabled():
+                raise RuntimeError(
+                    f"Missing trained Wav2Vec 2.0 checkpoint at '{active_checkpoint}'. "
+                    "VaniShield requires trained weights to provide genuine voice-clone detection. "
+                    "Please provide a fine-tuned checkpoint (e.g. in results_master_unified or via VANISHIELD_CHECKPOINT). "
+                    f"To run the interface without a detector, set {DEMO_ENV_VAR}=1."
+                )
+            logger.warning(DEMO_BANNER)
+            print(f"  [1/5 Audio Ear] {DEMO_BANNER}")
+            self.demo_scorer = DemoAcousticScorer()
+            self.fe = None
+            self.model = None
+            self._init_support_pillars()
+            return
 
+        # 1. Feature Extractor
+        self.fe = AutoFeatureExtractor.from_pretrained(
+            active_checkpoint,
+            local_files_only=True
+        )
 
         # 2. Unified Multimodal Network (Wav2Vec 2.0 + Jev-Omni Fusion Head)
-
         self.model = UnifiedMultilingualVoiceNet(w2v_model_path=active_checkpoint).to(self.device)
-
-        self.jev_head_trained = False
 
         if active_checkpoint == FALLBACK_MULTI_DIR and os.path.exists(UNIFIED_MODEL_PT):
 
@@ -423,7 +549,13 @@ class VaniShieldCore:
 
             torch.cuda.synchronize()
 
+        self._init_support_pillars()
 
+
+
+
+    def _init_support_pillars(self):
+        """ASR, biometrics and blacklist - none of which need trained weights."""
 
         # 3. Speech-to-Text: Primary Sarvam AI Saaras STT (with local Faster-Whisper fallback)
 
@@ -525,19 +657,111 @@ class VaniShieldCore:
 
 
 
+    def _score_windows(self, clips) -> list:
+        """
+        Synthetic-voice probability per 1.5s window, as percentages.
+
+        The single place the acoustic pillar is consulted, which makes it the
+        single place both substitutions live: the demo stub, and upstream's
+        fallback for an install with no torch.
+        """
+        if self.demo_scorer is not None:
+            return self.demo_scorer.score_windows_percent(clips)
+
+        if (
+            getattr(self, "fe", None) is None
+            or getattr(self, "model", None) is None
+            or not TORCH_AVAILABLE
+        ):
+            return [0.1] * max(1, len(clips))
+
+        # Batched GPU forward pass
+        batch_tensor = self.fe(
+            clips, sampling_rate=16000, return_tensors="pt", padding=True
+        )["input_values"].to(self.device)
+        logits = self.model.wav2vec_cls(batch_tensor).logits
+        return (torch.softmax(logits, dim=-1)[:, 1].cpu().numpy() * 100.0).tolist()
+
+    def _persist_blacklist(self) -> bool:
+        """
+        Atomically rewrites the blacklist file. Caller must hold _blacklist_lock.
+
+        Writes to a temp file and renames, so a crash mid-write cannot leave a
+        truncated JSON file that would silently empty the blacklist on restart.
+        """
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
+            tmp_file = f"{BLACKLIST_FILE}.tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_file, BLACKLIST_FILE)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to atomically update scammer blacklist at {BLACKLIST_FILE}: {e}")
+            return False
+
+    @staticmethod
+    def normalize_caller_key(phone_number: str) -> str:
+        """The blacklist key for a caller: digits and '+' only, annotations stripped."""
+        return (phone_number or "").strip().split(" ")[0].replace("-", "").strip()
+
+    def block_caller(self, phone_number: str, reason: str = "Blocked by user", risk_score: float = 100.0) -> dict:
+        """
+        Adds a caller to the blacklist on the user's own instruction.
+
+        Stores only an HMAC of the number alongside the record, never the raw
+        number in the audit fields — the key itself is what the lookup needs,
+        and the DPDP posture is that identity beyond that stays hashed.
+        """
+        key = self.normalize_caller_key(phone_number)
+        if not key:
+            raise ValueError("A caller number is required to block.")
+
+        try:
+            from ephemeral_buffer import hash_caller_identity
+            caller_hash = hash_caller_identity(key)
+        except Exception:
+            caller_hash = "ANONYMIZED_CALLER"
+
+        entry = {
+            "caller_hash": caller_hash,
+            "location": "User-reported",
+            "carrier": "User-reported",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "risk_score": risk_score,
+            "reason": reason,
+            "action": "BLOCKED_BY_USER",
+        }
+        with _blacklist_lock:
+            self.blacklist[key] = entry
+            persisted = self._persist_blacklist()
+        return {"caller": key, "entry": entry, "persisted": persisted}
+
+    def unblock_caller(self, phone_number: str) -> bool:
+        """
+        Removes a caller from the blacklist. Returns False when not present.
+
+        Needed because the circuit breaker writes entries automatically at
+        risk >= 70, so a false positive would otherwise be permanent and there
+        would be no way for the user to undo it.
+        """
+        key = self.normalize_caller_key(phone_number)
+        with _blacklist_lock:
+            if key not in self.blacklist:
+                return False
+            self.blacklist.pop(key, None)
+            self._persist_blacklist()
+        return True
+
     def detect_language(self, text: str) -> str:
+        """
+        Heuristic language tag for Bengali, Hindi, or English.
 
-        """Heuristic language tag for Bengali, Hindi, or English."""
-
-        if any('\u0980' <= c <= '\u09FF' for c in text):
-
-            return "bn"
-
-        if any('\u0900' <= c <= '\u097F' for c in text):
-
-            return "hi"
-
-        return "en"
+        Delegates to `scam_stages.detect_language`, which also recognises the
+        romanised and Shahmukhi renderings the ASR produces - a script-only
+        check tags those English and serves the wrong UI language.
+        """
+        return scam_stages.detect_language(text)
 
 
 
@@ -607,7 +831,7 @@ class VaniShieldCore:
 
 
 
-    def transcribe_and_spot_keywords(self, audio_chunk_16k: np.ndarray) -> tuple:
+    def transcribe_and_spot_keywords(self, audio_chunk_16k: np.ndarray, is_upload: bool = False) -> tuple:
 
         """
 
@@ -615,11 +839,22 @@ class VaniShieldCore:
 
         Uses Sarvam AI Saaras STT when SARVAM_API_KEY is configured, with Faster-Whisper fallback.
 
-        Returns: (text: str, flagged_keywords: list, error_msg: Optional[str])
+        Returns: (text, flagged_keywords, error_msg, asr_language)
+
+        `is_upload` is now a real parameter. It was previously referenced as a
+        free variable inside the Sarvam branch, which raised NameError on every
+        call and was swallowed by the surrounding except - so Sarvam STT never
+        actually ran and every transcript silently came from Faster-Whisper.
+
+        `asr_language` is Whisper's own language identification, which beats
+        inspecting the transcript's script: the ASR hears the audio, whereas
+        the text it emits may be romanised or Shahmukhi and carry no script
+        signal at all.
 
         """
 
         text = ""
+        asr_language = None
 
         transcription_err = None
 
@@ -688,6 +923,7 @@ class VaniShieldCore:
                 )
 
                 text = " ".join([s.text for s in segments]).strip()
+                asr_language = getattr(info, "language", None)
 
                 transcription_err = None
 
@@ -717,7 +953,7 @@ class VaniShieldCore:
 
                     flagged.extend(matches)
 
-        return text, list(set(flagged)), transcription_err
+        return text, list(set(flagged)), transcription_err, asr_language
 
 
 
@@ -960,7 +1196,7 @@ class VaniShieldCore:
 
     @torch.inference_mode()
 
-    def evaluate_live_call(self, audio_chunk_16k: np.ndarray, phone_number: str, known_transcript: str = None, is_upload: bool = False) -> dict:
+    def evaluate_live_call(self, audio_chunk_16k: np.ndarray, phone_number: str, known_transcript: str = None, is_upload: bool = False, lang: str = None, persist_blacklist: bool = True) -> dict:
 
         """Unified end-to-end evaluation using calibrated Wav2Vec2 + Jev-Omni network in sub-second time."""
 
@@ -985,6 +1221,10 @@ class VaniShieldCore:
             is_blacklisted = telecom.get("is_blacklisted", False)
 
             latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            # No speech, so nothing to detect the language from - honour the
+            # language the caller already established for this session.
+            silent_lang = scam_stages.normalize_lang(lang)
+            silent_fusion = fuse_risk([], acoustic_prob=0.0, blacklisted=bool(is_blacklisted))
 
             return {
 
@@ -1035,8 +1275,32 @@ class VaniShieldCore:
                 },
 
                 "call_state": "LINE_MUTED_OR_SILENT",
-
-                "explanation": "No active voice detected on call line (microphone muted / silence pause). Circuit breaker disengaged, monitoring on standby."
+                "lang": silent_lang,
+                "legacy_risk_score": 99.0 if is_blacklisted else 0.0,
+                "acoustic": {
+                    "window_probs": [],
+                    "window_count": 0,
+                    "ema": 0.0,
+                    "threshold": scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD,
+                    "synthetic": False,
+                },
+                "stage_analysis": _empty_stage_payload(silent_lang),
+                "fusion": {
+                    **silent_fusion,
+                    "band_label": scam_stages.band_label(silent_fusion["band"], silent_lang),
+                },
+                "events": [{
+                    "t": 0.0,
+                    "kind": "acoustic",
+                    "severity": "info",
+                    "lang": silent_lang,
+                    "text": scam_stages.event_text("mic_silent", silent_lang),
+                }],
+                "explanation": (
+                    scam_stages.VERDICT_STRINGS[silent_lang]["blacklisted"]
+                    if is_blacklisted
+                    else scam_stages.VERDICT_STRINGS[silent_lang]["silent"]
+                ),
 
             }
 
@@ -1108,13 +1372,7 @@ class VaniShieldCore:
 
 
 
-                # Batched GPU forward pass
-        if getattr(self, "fe", None) is not None and getattr(self, "model", None) is not None and TORCH_AVAILABLE:
-            batch_tensor = self.fe(clips, sampling_rate=16000, return_tensors="pt", padding=True)["input_values"].to(self.device)
-            logits = self.model.wav2vec_cls(batch_tensor).logits
-            window_probs = (torch.softmax(logits, dim=-1)[:, 1].cpu().numpy() * 100.0).tolist()
-        else:
-            window_probs = [0.1]
+        window_probs = self._score_windows(clips)
 
 
 
@@ -1261,6 +1519,7 @@ class VaniShieldCore:
         # 3. Fast Multilingual ASR & Triggers (< 350 ms)
 
         transcription_err = None
+        asr_language = None
 
         if known_transcript:
 
@@ -1280,7 +1539,7 @@ class VaniShieldCore:
 
         else:
 
-            transcript, flagged_kw, transcription_err = self.transcribe_and_spot_keywords(audio_chunk_16k)
+            transcript, flagged_kw, transcription_err, asr_language = self.transcribe_and_spot_keywords(audio_chunk_16k, is_upload=is_upload)
 
 
 
@@ -1516,6 +1775,34 @@ class VaniShieldCore:
 
         final_risk = round(final_risk, 1)
 
+        # 6b. Social-engineering stage pillar and noisy-OR fusion.
+        legacy_risk_score = final_risk
+        # Prefer the language of the transcript in hand; fall back to whatever
+        # the caller already knows about this session (a live call accumulates
+        # a better read than any single 3.5s window can give), then English.
+        # Whisper's own language id beats any inspection of the text it
+        # produced: it heard the audio, and the Bengali fixture comes back in
+        # Shahmukhi with no Bengali character anywhere in the transcript.
+        if asr_language:
+            lang = scam_stages.lang_from_asr(asr_language)
+        elif transcript:
+            lang = self.detect_language(transcript)
+        lang = scam_stages.normalize_lang(lang)
+        stage_analysis = classify_stages(transcript)
+        acoustic_series = [round(p / 100.0, 4) for p in window_probs] if window_probs else []
+        acoustic_prob = acoustic_ema(acoustic_series)
+        fusion = fuse_risk(
+            stage_analysis.stages,
+            acoustic_prob=acoustic_prob,
+            payment_attempt=stage_analysis.payment_attempt,
+            blacklisted=bool(telecom.get("is_blacklisted", False)),
+            voip_spoofed=bool(telecom.get("is_voip_spoofed", False)),
+            credential_high_sensitivity=stage_analysis.high_sensitivity_credential,
+        )
+        final_risk = fusion["risk_score"]
+        legacy_threat_type = threat_type
+        threat_type = threat_type_from_fusion(fusion, stage_analysis.stages, acoustic_prob)
+
 
 
         # 7. Circuit Breaker Threshold: strictly derived from final_risk >= 70.0 or blacklisted caller
@@ -1546,7 +1833,7 @@ class VaniShieldCore:
 
         )
 
-        if circuit_breaker_active and not is_generic_upload and clean_key.startswith("+91"):
+        if persist_blacklist and circuit_breaker_active and not is_generic_upload and clean_key.startswith("+91"):
 
             threat_reason = f"{threat_type}: Voice clone / financial vishing threat detected"
 
@@ -1578,22 +1865,7 @@ class VaniShieldCore:
             }
             with _blacklist_lock:
                 self.blacklist[caller_hash] = entry
-
-                try:
-
-                    os.makedirs(os.path.dirname(os.path.abspath(BLACKLIST_FILE)), exist_ok=True)
-
-                    tmp_file = f"{BLACKLIST_FILE}.tmp"
-
-                    with open(tmp_file, "w", encoding="utf-8") as f:
-
-                        json.dump(self.blacklist, f, indent=2, ensure_ascii=False)
-
-                    os.replace(tmp_file, BLACKLIST_FILE)
-
-                except Exception as e:
-
-                    logger.error(f"Failed to atomically update scammer blacklist at {BLACKLIST_FILE}: {e}")
+                self._persist_blacklist()
 
 
 
@@ -1635,7 +1907,26 @@ class VaniShieldCore:
 
             "telecom": telecom,
 
-            "dsp_metrics": dsp
+            "dsp_metrics": dsp,
+
+            # --- Stage pillar, fusion and localisation ----------------------
+            "lang": scam_stages.normalize_lang(lang),
+            "legacy_risk_score": legacy_risk_score,
+            "legacy_threat_type": legacy_threat_type,
+            "acoustic": {
+                "window_probs": acoustic_series,
+                "window_count": len(acoustic_series),
+                "ema": acoustic_prob,
+                "threshold": scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD,
+                "synthetic": bool(acoustic_prob >= scam_stages.ACOUSTIC_SYNTHETIC_THRESHOLD),
+            },
+            "stage_analysis": stage_analysis.as_dict(lang),
+            "fusion": {
+                **fusion,
+                "band_label": scam_stages.band_label(fusion["band"], lang),
+            },
+            "explanation": explain_verdict(stage_analysis, fusion, lang),
+            "events": _synth_events(stage_analysis, fusion, circuit_breaker_active, lang),
 
         }
 

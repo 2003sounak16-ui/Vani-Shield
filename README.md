@@ -150,6 +150,50 @@ python caller_tracker.py --list
 
 ---
 
+## 🧠 Social-Engineering Stage Pillar
+
+Alongside "is this voice synthetic?", VaniShield also asks the orthogonal question "is this conversation a scam script?". `scam_stages.py` decomposes the transcript into the five stages of a vishing playbook — **Authority**, **Urgency**, **Money/OTP**, **Secrecy**, **Remote app** — in English, Hindi and Bengali, including the romanised and Urdu-script forms the ASR produces on regional calls.
+
+Two design points worth knowing before changing it:
+
+* **Stages, not keywords.** A single keyword is near-worthless as evidence; "I never received the OTP" is not a scam. The combination of an identity claim, a deadline and a credential demand very nearly is. Stages also yield an explanation a person can act on rather than a bag of matched words.
+* **Noisy-OR, not a weighted sum.** Each independent signal multiplicatively erodes the probability the call is legitimate. Three weak signals can convict where none alone would, and no single pillar can saturate the score — which is what lets a threshold ladder turn one loud acoustic reading into a 99% verdict on a safe call.
+
+Every match carries character offsets back into the transcript, so the UI highlights the exact phrase that fired. Awareness advice is detected and masked first: a bank's own "never share your OTP" recording contains the highest-signal credential words in the language and must score zero, not maximum.
+
+Run the tests with `python test_scam_stages.py` (no pytest required).
+
+---
+
+## 🖥️ The Two Call Screens
+
+| Route | What it is |
+|---|---|
+| `/dashboard` | Mission control — per-window acoustic scores, the stage strip, live transcript with highlighted triggers, risk contributions, event log, telecom data. For an operator. |
+| `/call` | The incoming-call alert a person actually sees: one risk ring, one plain-language sentence, the stages as pills, and the hang-up and block buttons. For the person being scammed. |
+
+Both follow the language of the call. The transcript is tagged `en`/`hi`/`bn` — from Whisper's own language id, which also catches the romanised and Shahmukhi output a script check would miss — and the server sends every user-visible string already translated, so the screen a Bengali-speaking grandmother sees is in Bengali.
+
+They are served by three endpoints added alongside the existing ones:
+
+* `GET /api/stages?lang=bn` — the five stage keys with localised labels, weights and thresholds, so a client can render the stage strip before the first call arrives.
+* `WS /ws/replay/{preset_id}` — streams a shipped fixture through the **real** pipeline in steps, revealing the transcript as it goes. The staged reveal on the dashboard is actual inference, not a scripted timer.
+* `POST /api/blacklist` and `DELETE /api/blacklist/{phone_number}` — the circuit breaker writes entries automatically at risk ≥ 70, so the delete is how a false positive gets undone.
+
+---
+
+## 🧪 Demo Mode (no trained weights)
+
+The engine refuses to start without a fine-tuned Wav2Vec 2.0 checkpoint — an untrained voice-clone detector is worse than none, because the user believes it. To run the interface without one:
+
+```bash
+VANISHIELD_DEMO=1 python app.py
+```
+
+This substitutes a deterministic heuristic stub **for the acoustic pillar only**. The ASR, the stage pillar and the fusion are all real. `GET /health` reports `demo_mode` and names the stub, and both screens show a badge. Never present its output as a detection result.
+
+---
+
 ## 👥 Team CypherEye
 - **Lead AI Systems Engineer**: Sounak Banerjee ([@2003sounak16-ui](https://github.com/2003sounak16-ui))
 - **Documentation**: Comprehensive technical references are available in the [`docs/`](docs/) directory.
