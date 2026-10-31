@@ -18,6 +18,9 @@ venv/
 env/
 ENV/
 .venv/
+node_modules/
+dist/
+.vite/
 
 # IDE / Editor configuration
 .vscode/
