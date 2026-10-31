@@ -10,11 +10,33 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
 
   const isLocked = bankingState?.locked;
 
-  const handlePay = () => {
-    if (isLocked) return;
-    const res = onTransfer ? onTransfer(payee, amount) : { success: true };
-    setTransferMsg(`Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
-    setTimeout(() => setTransferMsg(null), 4000);
+  const [transferError, setTransferError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handlePay = async () => {
+    if (isLocked || isSubmitting) return;
+    setIsSubmitting(true);
+    setTransferError(null);
+    try {
+      if (onTransfer) {
+        const res = await onTransfer(payee, amount);
+        if (res && res.success) {
+          setTransferMsg(res.message || `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
+          setTimeout(() => setTransferMsg(null), 4000);
+        } else {
+          setTransferError(res?.message || 'Transaction rejected: Circuit breaker or banking policy engaged.');
+          setTimeout(() => setTransferError(null), 5000);
+        }
+      } else {
+        setTransferMsg(`Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.`);
+        setTimeout(() => setTransferMsg(null), 4000);
+      }
+    } catch (err) {
+      setTransferError('Transaction rejected: Unable to communicate with banking service.');
+      setTimeout(() => setTransferError(null), 5000);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleUnlockSubmit = async (e) => {
@@ -105,6 +127,13 @@ export default function MockBankingApp({ bankingState, onUnlock, onTransfer }) {
             <div className="p-2 bg-emerald-500/15 border border-emerald-500/40 rounded-lg text-emerald-400 text-xs flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
               <span>{transferMsg}</span>
+            </div>
+          )}
+
+          {transferError && (
+            <div className="p-2 bg-red-500/15 border border-red-500/40 rounded-lg text-red-400 text-xs flex items-center gap-1.5">
+              <AlertOctagon className="w-4 h-4 flex-shrink-0" />
+              <span>{transferError}</span>
             </div>
           )}
         </div>

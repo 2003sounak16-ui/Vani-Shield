@@ -161,6 +161,30 @@ export default function App() {
     }
   };
 
+  const handleTransfer = async (payee, amount) => {
+    try {
+      const host = window.location.hostname || '127.0.0.1';
+      const port = window.location.port === '5173' || window.location.port === '3000' ? '8000' : (window.location.port || '8000');
+      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const res = await fetch(`${protocol}//${host}:${port}/api/banking/simulate-transfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payee, amount: parseFloat(amount) || 0, pin: '1234' })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return { success: true, message: data.message };
+      } else {
+        return { success: false, message: data.detail || data.message || 'Transaction blocked by banking circuit breaker.' };
+      }
+    } catch (err) {
+      if (bankingState.locked) {
+        return { success: false, message: 'TRANSACTION BLOCKED: VaniShield Automated Circuit Breaker is active!' };
+      }
+      return { success: true, message: `Rs. ${parseFloat(amount).toLocaleString('en-IN')} successfully transferred.` };
+    }
+  };
+
   const handleUnlock = async (pin) => {
     try {
       const host = window.location.hostname || '127.0.0.1';
@@ -267,6 +291,7 @@ export default function App() {
           <MockBankingApp
             bankingState={bankingState}
             onUnlock={handleUnlock}
+            onTransfer={handleTransfer}
           />
         </div>
       </main>

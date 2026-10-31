@@ -23,6 +23,7 @@ Integrates:
 
 
 import os
+import hmac
 
 import sys
 
@@ -84,7 +85,7 @@ import torch
 
 import torchaudio
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Form, Request
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -874,10 +875,23 @@ async def get_stt_status():
 
 MAX_TTS_TEXT_LENGTH = 500
 _tts_lock = threading.Lock()
-_tts_timestamps = []
-MAX_TTS_PER_MINUTE = 10
+_tts_timestamps = []  # global sliding-window timestamps
+_tts_ip_timestamps: dict = {}  # per-IP sliding-window timestamps
+MAX_TTS_PER_MINUTE = 10          # global cap: calls per minute
+MAX_TTS_PER_IP_PER_MINUTE = 5   # per-source-IP cap: calls per minute
 
-def _check_tts_budget_and_length(text: str):
+
+def _check_tts_access(request: Request) -> None:
+    """Verify X-TTS-Token header matches TTS_ACCESS_TOKEN env var when configured."""
+    expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+    if expected:
+        provided = (request.headers.get("X-TTS-Token") or "").strip()
+        if not provided or not hmac.compare_digest(provided, expected):
+            raise HTTPException(status_code=401, detail="TTS endpoint requires a valid X-TTS-Token header.")
+
+
+def _check_tts_budget_and_length(text: str, request: Request = None) -> None:
+    """Enforce text-length bound and sliding-window rate limits (global + per-IP)."""
     stripped = text.strip()
     if not stripped:
         raise HTTPException(status_code=400, detail="Text field cannot be empty.")
@@ -887,14 +901,25 @@ def _check_tts_budget_and_length(text: str):
             detail=f"Text exceeds maximum permitted length ({MAX_TTS_TEXT_LENGTH} characters)."
         )
     now = time.time()
+    client_ip = (request.client.host if request and request.client else "unknown")
     with _tts_lock:
+        # Global rate limit
         _tts_timestamps[:] = [t for t in _tts_timestamps if now - t < 60.0]
         if len(_tts_timestamps) >= MAX_TTS_PER_MINUTE:
             raise HTTPException(
                 status_code=429,
                 detail="TTS generation rate limit / budget quota reached. Please try again in 1 minute."
             )
+        # Per-IP rate limit
+        ip_ts = _tts_ip_timestamps.setdefault(client_ip, [])
+        ip_ts[:] = [t for t in ip_ts if now - t < 60.0]
+        if len(ip_ts) >= MAX_TTS_PER_IP_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Per-client TTS rate limit reached. Maximum {MAX_TTS_PER_IP_PER_MINUTE} requests per minute."
+            )
         _tts_timestamps.append(now)
+        ip_ts.append(now)
 
 
 @app.get("/api/tts/voices")
@@ -922,7 +947,7 @@ async def get_tts_voices():
 
 @app.post("/api/tts/synthesize")
 
-async def tts_synthesize(req: SynthesizeRequest):
+async def tts_synthesize(req: SynthesizeRequest, request: Request):
 
     """Generates audio for given text via ElevenLabs API (or fallback) and streams audio/mpeg."""
 
@@ -932,13 +957,11 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    _check_tts_access(request)
 
 
 
-    _check_tts_budget_and_length(req.text)
+    _check_tts_budget_and_length(req.text, request)
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
         ANALYSIS_EXECUTOR,
@@ -965,7 +988,7 @@ async def tts_synthesize(req: SynthesizeRequest):
 
 @app.post("/api/tts/simulate-attack")
 
-async def tts_simulate_attack(req: SynthesizeRequest):
+async def tts_simulate_attack(req: SynthesizeRequest, request: Request):
 
     """
 
@@ -981,13 +1004,11 @@ async def tts_simulate_attack(req: SynthesizeRequest):
 
 
 
-    if not req.text.strip():
-
-        raise HTTPException(status_code=400, detail="Text field cannot be empty.")
+    _check_tts_access(request)
 
 
 
-    _check_tts_budget_and_length(req.text)
+    _check_tts_budget_and_length(req.text, request)
     loop = asyncio.get_running_loop()
     audio_bytes, meta, err = await loop.run_in_executor(
         ANALYSIS_EXECUTOR,

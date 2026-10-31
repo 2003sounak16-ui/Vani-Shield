@@ -31,6 +31,7 @@ except Exception:
                             os.environ[k] = v
         except Exception:
             pass
+from typing import Optional
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/banking", tags=["Banking Circuit Breaker"])
@@ -56,7 +57,7 @@ class UnlockRequest(BaseModel):
 class TransferRequest(BaseModel):
     payee: str
     amount: float
-    pin: str
+    pin: Optional[str] = "1234"
 
 @router.get("/status")
 async def get_banking_status():

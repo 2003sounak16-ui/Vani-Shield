@@ -214,14 +214,28 @@ class TestVaniShieldFixes(unittest.TestCase):
             self.assertTrue(is_bl)
             self.assertEqual(bl_data["caller_hash"], h)
 
-            # Verify backward compatibility with legacy-hashed records
+            # Verify backward compatibility with legacy-hashed records.
+            # Use a SEPARATE temp file with ONLY the legacy record so the canonical
+            # hash key (h) is absent and is_blacklisted must reach the legacy fallback
+            # path to succeed — without this isolation the test always hits the
+            # canonical record first and the legacy path is never exercised.
             h_legacy = ct.hash_caller_identity_legacy(test_phone)
-            import json
-            saved_bl[h_legacy] = {"caller_hash": h_legacy, "phone_masked": "+919****6655", "risk_score": 90.0}
-            with open(temp_bl, "w", encoding="utf-8") as f:
-                json.dump(saved_bl, f)
-            is_bl_legacy, bl_data_legacy = ct.is_blacklisted(test_phone)
-            self.assertTrue(is_bl_legacy)
+            import json, tempfile as _tmpmod
+            with _tmpmod.NamedTemporaryFile(suffix=".json", delete=False) as tf2:
+                temp_bl_legacy = tf2.name
+            try:
+                legacy_only = {h_legacy: {"caller_hash": h_legacy, "phone_masked": "+919****6655", "risk_score": 90.0}}
+                with open(temp_bl_legacy, "w", encoding="utf-8") as f:
+                    json.dump(legacy_only, f)
+                ct.BLACKLIST_PATH = temp_bl_legacy
+                is_bl_legacy, bl_data_legacy = ct.is_blacklisted(test_phone)
+                self.assertTrue(is_bl_legacy, "Legacy hash backward-compat lookup must succeed")
+                self.assertEqual(bl_data_legacy["caller_hash"], h_legacy,
+                                 "Returned record must be the legacy-keyed entry")
+            finally:
+                ct.BLACKLIST_PATH = temp_bl  # restore to canonical temp file
+                if os.path.exists(temp_bl_legacy):
+                    os.remove(temp_bl_legacy)
 
         finally:
             ct.BLACKLIST_PATH = old_bl
