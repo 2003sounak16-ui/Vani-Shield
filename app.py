@@ -288,26 +288,20 @@ async def startup_check():
 
 # Explicit allowed origins to secure endpoints and prevent CWE-942
 
-allowed_origins_env = os.environ.get("VANISHIELD_ALLOWED_ORIGINS")
-
-if allowed_origins_env:
-
-    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
-
+# CORS. Mirrors backend/main.py exactly, because this app is now the
+# deployment entry point, and changing the security posture in the same
+# change that moves the entry point would be two decisions wearing one hat.
+# The permissive default is inherited here, not endorsed.
+configured_origins = os.environ.get("VANISHIELD_ALLOWED_ORIGINS", "").strip()
+if configured_origins and configured_origins != "*":
+    allowed_origins = [o.strip() for o in configured_origins.split(",") if o.strip()]
+    allow_credentials = True
 else:
-
-    allowed_origins = [
-
-        "http://localhost:8000",
-
-        "http://127.0.0.1:8000",
-
-        "http://localhost:3000",
-
-        "http://127.0.0.1:3000"
-
-    ]
-
+    # Allow all origins for cloud PaaS deployments. Credentials are disabled
+    # in that mode - the two cannot be combined and the browser would reject
+    # the response anyway.
+    allowed_origins = ["*"]
+    allow_credentials = False
 
 
 app.add_middleware(
@@ -316,9 +310,9 @@ app.add_middleware(
 
     allow_origins=allowed_origins,
 
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
 
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
 
     allow_headers=["*"],
 
@@ -342,6 +336,23 @@ def _serve_static_page(filename: str, missing_hint: str) -> str:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
     return f"<h1>VaniShield AI Backend Online</h1><p>{missing_hint}</p>"
+
+
+# Mount the built React UI, as backend/main.py did. Without this, moving the
+# entry point would silently stop serving the frontend bundle.
+FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
+if os.path.exists(FRONTEND_DIST):
+    _assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.exists(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="react-assets")
+
+    @app.get("/react", response_class=HTMLResponse)
+    async def serve_react_dashboard():
+        react_index = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.exists(react_index):
+            with open(react_index, "r", encoding="utf-8") as f:
+                return f.read()
+        return "<h1>React Dashboard Not Found</h1>"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1326,6 +1337,52 @@ async def health_check():
 
 
 
+# -------------------------------------------------------------
+# Ported from backend/main.py so that one application serves every
+# endpoint. Both are defensive about their imports: neither the caller
+# tracker nor the mobile edge engine is required for the core product,
+# and a missing optional dependency should degrade one endpoint rather
+# than prevent the service from starting.
+# -------------------------------------------------------------
+@app.get("/api/scammers")
+async def get_blacklisted_scammers():
+    """Flagged scammer records for the threat map, with DPDP-compliant masking."""
+    try:
+        from backend.engine.caller_tracker import load_blacklist
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Caller tracker unavailable: {e}")
+
+    raw_data = load_blacklist()
+    sanitized = {}
+    for phone, record in raw_data.items():
+        masked_key = phone[:4] + "****" + phone[-4:] if len(phone) >= 8 else "ANONYMIZED_RECORD"
+        entry = dict(record)
+        entry["phone_masked"] = masked_key
+        sanitized[masked_key] = entry
+    return {"count": len(sanitized), "scammers": sanitized}
+
+
+@app.get("/api/engine/mobile-status")
+async def get_mobile_engine_status():
+    """Mobile Edge Engine status, active ONNX provider and memory footprint."""
+    try:
+        from backend.engine.mobile_edge_engine import mobile_engine
+    except Exception as e:
+        return {"mode": "mobile_edge_optimized", "onnx_model_loaded": False,
+                "active_provider": None, "error": f"Mobile edge engine unavailable: {e}"}
+
+    model_loaded = mobile_engine.ort_session is not None
+    return {
+        "mode": "mobile_edge_optimized",
+        "onnx_model_loaded": model_loaded,
+        "active_provider": mobile_engine.active_provider,
+        "model_file": os.path.basename(mobile_engine.model_path) if mobile_engine.model_path else "None",
+        "quantization": "INT8" if mobile_engine.model_path and "int8" in mobile_engine.model_path else "FP32",
+        "estimated_ram_mb": 91.0 if model_loaded else 15.0,
+        "target_platforms": ["Android (NNAPI / Qualcomm QNN)", "iOS (CoreML)", "Edge Linux / ARM64"],
+    }
+
+
 @app.get("/api/blacklist")
 
 async def get_blacklist():
@@ -1629,5 +1686,7 @@ if __name__ == "__main__":
 
     print("=" * 70 + "\n")
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    server_host = os.environ.get("VANISHIELD_HOST", "127.0.0.1")
+    server_port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host=server_host, port=server_port, log_level="info")
 
