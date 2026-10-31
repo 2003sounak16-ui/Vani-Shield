@@ -230,7 +230,15 @@ def main():
         W = model.jev_head.weight.detach().cpu().numpy()
         b = model.jev_head.bias.detach().cpu().numpy()
 
-        np.savez(OUTPUT_NPZ, mu=mu, sd=sd, W=W, b=b)
+        np.savez(
+            OUTPUT_NPZ,
+            mu=mu,
+            sd=sd,
+            W=W,
+            b=b,
+            norm_w=model.jev_norm.weight.detach().cpu().numpy(),
+            norm_b=model.jev_norm.bias.detach().cpu().numpy()
+        )
         torch.save(model.state_dict(), OUTPUT_PT)
 
         print(f"\n[SUCCESS] Exported calibrated Jev-Omni decision head -> {OUTPUT_NPZ}")

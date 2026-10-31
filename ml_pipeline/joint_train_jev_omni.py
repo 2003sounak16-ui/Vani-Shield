@@ -144,7 +144,9 @@ def main():
             head_out,
             mu=mu, sd=sd,
             W=model.jev_head.weight.detach().cpu().numpy(),
-            b=model.jev_head.bias.detach().cpu().numpy()
+            b=model.jev_head.bias.detach().cpu().numpy(),
+            norm_w=model.jev_norm.weight.detach().cpu().numpy(),
+            norm_b=model.jev_norm.bias.detach().cpu().numpy()
         )
         print(f"\n[SUCCESS] Saved unified model -> {model_out}")
         print(f"[SUCCESS] Saved Jev-Omni head -> {head_out}")
