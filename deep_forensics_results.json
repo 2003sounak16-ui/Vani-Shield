@@ -1,0 +1,422 @@
+[
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.08.44 PM.ogg",
+    "duration": 19.63,
+    "dsp": {
+      "f0_mean": 133.0,
+      "f0_std": 66.3,
+      "voiced_ratio": 0.787,
+      "zcr": 0.0966,
+      "flatness": 0.01936,
+      "centroid": 1379.3,
+      "rolloff": 2704.1
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 0.11,
+        "median": 0.09,
+        "p75": 0.12,
+        "min": 0.08,
+        "max": 0.26,
+        "windows_over_50": 0,
+        "total_windows": 17
+      },
+      "Master SOTA": {
+        "mean": 50.43,
+        "median": 73.75,
+        "p75": 98.85,
+        "min": 0.14,
+        "max": 99.9,
+        "windows_over_50": 9,
+        "total_windows": 17
+      },
+      "Master Balanced": {
+        "mean": 0.48,
+        "median": 0.09,
+        "p75": 0.11,
+        "min": 0.08,
+        "max": 3.42,
+        "windows_over_50": 0,
+        "total_windows": 17
+      },
+      "4447 Models": {
+        "mean": 99.91,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 99.91,
+        "max": 99.91,
+        "windows_over_50": 17,
+        "total_windows": 17
+      },
+      "Real Multilingual": {
+        "mean": 11.73,
+        "median": 10.12,
+        "p75": 10.88,
+        "min": 8.93,
+        "max": 28.1,
+        "windows_over_50": 0,
+        "total_windows": 17
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.09.36 PM.ogg",
+    "duration": 11.83,
+    "dsp": {
+      "f0_mean": 272.0,
+      "f0_std": 28.5,
+      "voiced_ratio": 0.951,
+      "zcr": 0.1107,
+      "flatness": 0.007371,
+      "centroid": 1620.9,
+      "rolloff": 3307.7
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 0.1,
+        "median": 0.09,
+        "p75": 0.11,
+        "min": 0.06,
+        "max": 0.2,
+        "windows_over_50": 0,
+        "total_windows": 9
+      },
+      "Master SOTA": {
+        "mean": 11.74,
+        "median": 0.33,
+        "p75": 2.41,
+        "min": 0.12,
+        "max": 85.7,
+        "windows_over_50": 1,
+        "total_windows": 9
+      },
+      "Master Balanced": {
+        "mean": 0.1,
+        "median": 0.1,
+        "p75": 0.13,
+        "min": 0.07,
+        "max": 0.15,
+        "windows_over_50": 0,
+        "total_windows": 9
+      },
+      "4447 Models": {
+        "mean": 99.91,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 99.91,
+        "max": 99.91,
+        "windows_over_50": 9,
+        "total_windows": 9
+      },
+      "Real Multilingual": {
+        "mean": 18.83,
+        "median": 18.79,
+        "p75": 23.22,
+        "min": 11.07,
+        "max": 26.67,
+        "windows_over_50": 0,
+        "total_windows": 9
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.26.56 PM.mpeg",
+    "duration": 17.39,
+    "dsp": {
+      "f0_mean": 245.9,
+      "f0_std": 68.4,
+      "voiced_ratio": 0.647,
+      "zcr": 0.105,
+      "flatness": 0.02369,
+      "centroid": 1496.1,
+      "rolloff": 2889.7
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 0.08,
+        "median": 0.07,
+        "p75": 0.08,
+        "min": 0.06,
+        "max": 0.12,
+        "windows_over_50": 0,
+        "total_windows": 15
+      },
+      "Master SOTA": {
+        "mean": 7.04,
+        "median": 0.19,
+        "p75": 0.26,
+        "min": 0.13,
+        "max": 98.96,
+        "windows_over_50": 1,
+        "total_windows": 15
+      },
+      "Master Balanced": {
+        "mean": 0.09,
+        "median": 0.09,
+        "p75": 0.1,
+        "min": 0.07,
+        "max": 0.14,
+        "windows_over_50": 0,
+        "total_windows": 15
+      },
+      "4447 Models": {
+        "mean": 93.26,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 0.2,
+        "max": 99.91,
+        "windows_over_50": 14,
+        "total_windows": 15
+      },
+      "Real Multilingual": {
+        "mean": 9.35,
+        "median": 9.37,
+        "p75": 9.75,
+        "min": 8.41,
+        "max": 10.52,
+        "windows_over_50": 0,
+        "total_windows": 15
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.30.22 PM.mpeg",
+    "duration": 15.73,
+    "dsp": {
+      "f0_mean": 258.4,
+      "f0_std": 72.2,
+      "voiced_ratio": 0.76,
+      "zcr": 0.1103,
+      "flatness": 0.02261,
+      "centroid": 1549.7,
+      "rolloff": 2940.6
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 14.91,
+        "median": 0.14,
+        "p75": 0.38,
+        "min": 0.07,
+        "max": 99.74,
+        "windows_over_50": 2,
+        "total_windows": 13
+      },
+      "Master SOTA": {
+        "mean": 80.63,
+        "median": 98.9,
+        "p75": 99.87,
+        "min": 1.51,
+        "max": 99.9,
+        "windows_over_50": 11,
+        "total_windows": 13
+      },
+      "Master Balanced": {
+        "mean": 41.4,
+        "median": 9.14,
+        "p75": 99.45,
+        "min": 0.13,
+        "max": 99.93,
+        "windows_over_50": 6,
+        "total_windows": 13
+      },
+      "4447 Models": {
+        "mean": 99.83,
+        "median": 99.9,
+        "p75": 99.91,
+        "min": 99.39,
+        "max": 99.91,
+        "windows_over_50": 13,
+        "total_windows": 13
+      },
+      "Real Multilingual": {
+        "mean": 62.0,
+        "median": 74.9,
+        "p75": 84.47,
+        "min": 18.16,
+        "max": 88.64,
+        "windows_over_50": 8,
+        "total_windows": 13
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.38.38 PM.mpeg",
+    "duration": 38.59,
+    "dsp": {
+      "f0_mean": 154.0,
+      "f0_std": 71.3,
+      "voiced_ratio": 0.614,
+      "zcr": 0.1577,
+      "flatness": 0.096965,
+      "centroid": 1726.8,
+      "rolloff": 3112.2
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 25.78,
+        "median": 2.25,
+        "p75": 41.22,
+        "min": 0.11,
+        "max": 99.95,
+        "windows_over_50": 9,
+        "total_windows": 36
+      },
+      "Master SOTA": {
+        "mean": 93.41,
+        "median": 99.88,
+        "p75": 99.9,
+        "min": 4.96,
+        "max": 99.92,
+        "windows_over_50": 33,
+        "total_windows": 36
+      },
+      "Master Balanced": {
+        "mean": 24.48,
+        "median": 0.28,
+        "p75": 27.89,
+        "min": 0.09,
+        "max": 99.66,
+        "windows_over_50": 8,
+        "total_windows": 36
+      },
+      "4447 Models": {
+        "mean": 99.91,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 99.91,
+        "max": 99.91,
+        "windows_over_50": 36,
+        "total_windows": 36
+      },
+      "Real Multilingual": {
+        "mean": 22.63,
+        "median": 15.23,
+        "p75": 24.08,
+        "min": 9.86,
+        "max": 62.06,
+        "windows_over_50": 4,
+        "total_windows": 36
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-30 at 11.41.33 PM.mpeg",
+    "duration": 91.33,
+    "dsp": {
+      "f0_mean": 168.0,
+      "f0_std": 171.7,
+      "voiced_ratio": 0.601,
+      "zcr": 0.1162,
+      "flatness": 0.004877,
+      "centroid": 1359.3,
+      "rolloff": 2364.0
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 32.98,
+        "median": 1.02,
+        "p75": 95.48,
+        "min": 0.07,
+        "max": 99.96,
+        "windows_over_50": 30,
+        "total_windows": 89
+      },
+      "Master SOTA": {
+        "mean": 35.19,
+        "median": 0.63,
+        "p75": 99.23,
+        "min": 0.13,
+        "max": 99.91,
+        "windows_over_50": 32,
+        "total_windows": 89
+      },
+      "Master Balanced": {
+        "mean": 17.12,
+        "median": 0.12,
+        "p75": 0.41,
+        "min": 0.07,
+        "max": 99.94,
+        "windows_over_50": 15,
+        "total_windows": 89
+      },
+      "4447 Models": {
+        "mean": 99.91,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 99.91,
+        "max": 99.91,
+        "windows_over_50": 89,
+        "total_windows": 89
+      },
+      "Real Multilingual": {
+        "mean": 26.29,
+        "median": 9.54,
+        "p75": 25.0,
+        "min": 8.04,
+        "max": 87.9,
+        "windows_over_50": 19,
+        "total_windows": 89
+      }
+    }
+  },
+  {
+    "file": "WhatsApp Audio 2026-10-31 at 12.39.30 AM.mpeg",
+    "duration": 29.31,
+    "dsp": {
+      "f0_mean": 118.5,
+      "f0_std": 86.6,
+      "voiced_ratio": 0.444,
+      "zcr": 0.0901,
+      "flatness": 0.046147,
+      "centroid": 1329.0,
+      "rolloff": 2544.4
+    },
+    "models": {
+      "Master Unified (Production)": {
+        "mean": 9.88,
+        "median": 0.15,
+        "p75": 0.26,
+        "min": 0.06,
+        "max": 98.67,
+        "windows_over_50": 3,
+        "total_windows": 27
+      },
+      "Master SOTA": {
+        "mean": 42.4,
+        "median": 0.64,
+        "p75": 99.62,
+        "min": 0.14,
+        "max": 99.9,
+        "windows_over_50": 11,
+        "total_windows": 27
+      },
+      "Master Balanced": {
+        "mean": 0.9,
+        "median": 0.11,
+        "p75": 0.16,
+        "min": 0.07,
+        "max": 19.74,
+        "windows_over_50": 0,
+        "total_windows": 27
+      },
+      "4447 Models": {
+        "mean": 99.91,
+        "median": 99.91,
+        "p75": 99.91,
+        "min": 99.89,
+        "max": 99.91,
+        "windows_over_50": 27,
+        "total_windows": 27
+      },
+      "Real Multilingual": {
+        "mean": 10.69,
+        "median": 9.46,
+        "p75": 12.64,
+        "min": 8.41,
+        "max": 16.01,
+        "windows_over_50": 0,
+        "total_windows": 27
+      }
+    }
+  }
+]

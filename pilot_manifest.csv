@@ -1,0 +1,9 @@
+path,label,group
+data_pilot/pilot_real_1.wav,real,speaker_1
+data_pilot/pilot_real_2.wav,real,speaker_2
+data_pilot/pilot_real_3.wav,real,speaker_3
+data_pilot/pilot_real_4.wav,real,speaker_4
+data_pilot/pilot_fake_1.wav,fake,engine_1
+data_pilot/pilot_fake_2.wav,fake,engine_2
+data_pilot/pilot_fake_3.wav,fake,engine_3
+data_pilot/pilot_fake_4.wav,fake,engine_4
