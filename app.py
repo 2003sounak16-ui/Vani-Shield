@@ -202,6 +202,11 @@ def decode_audio_bytes(content: bytes, max_samples: int = MAX_DECODED_SAMPLES) -
         for frame in container.decode(audio=0):
             for rf in resampler.resample(frame):
                 arr_slice = rf.to_ndarray()
+                needed = max_samples - accumulated_samples
+                if needed <= 0:
+                    break
+                if arr_slice.shape[-1] > needed:
+                    arr_slice = arr_slice[..., :needed]
                 frames.append(arr_slice)
                 accumulated_samples += arr_slice.shape[-1]
                 if accumulated_samples >= max_samples:
@@ -220,15 +225,18 @@ def decode_audio_bytes(content: bytes, max_samples: int = MAX_DECODED_SAMPLES) -
         logger.warning(f"PyAV decode fallback triggered: {e}")
 
     try:
-        data, sr = sf.read(io.BytesIO(content))
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        if sr != 16000:
-            import librosa
-            data = librosa.resample(data, orig_sr=sr, target_sr=16000)
-        if len(data) > max_samples:
-            data = data[:max_samples]
-        return data.astype(np.float32)
+        with sf.SoundFile(io.BytesIO(content)) as sfile:
+            orig_sr = sfile.samplerate
+            max_frames_to_read = int(max_samples * (orig_sr / 16000.0)) + 1000 if orig_sr else max_samples
+            data = sfile.read(frames=max_frames_to_read, dtype="float32")
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            if orig_sr != 16000:
+                import librosa
+                data = librosa.resample(data, orig_sr=orig_sr, target_sr=16000)
+            if len(data) > max_samples:
+                data = data[:max_samples]
+            return data.astype(np.float32)
     except Exception as e:
         logger.error(f"Audio decode failed: {e}")
         raise HTTPException(status_code=400, detail=f"Unsupported or unreadable audio format: {e}")

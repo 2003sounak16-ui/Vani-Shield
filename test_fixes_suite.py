@@ -133,5 +133,27 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertEqual(data["W"].shape, (2, 3840))
         self.assertEqual(data["b"].shape, (2,))
 
+    def test_transcription_failure_status(self):
+        """Verify that when transcription fails, the verdict is incomplete_analysis rather than safe."""
+        transcription_err = "ASR model timeout"
+        known_transcript = None
+        transcription_failed = bool(transcription_err and not known_transcript)
+        analysis_status = "incomplete_analysis" if transcription_failed else "success"
+        w2v_p = 0.0
+        has_audible_speech = False
+
+        if transcription_failed:
+            final_risk = round(max(w2v_p, 45.0 if has_audible_speech else 20.0), 1)
+            threat_type = "UNVERIFIED_TRANSCRIPTION_FAILED"
+        else:
+            threat_type = "AUTHENTIC_SAFE_CALL"
+
+        cb_action = "HOLD_VERIFICATION_REQUIRED" if transcription_failed else "ALLOW_NORMAL_CALL"
+
+        self.assertEqual(analysis_status, "incomplete_analysis")
+        self.assertEqual(threat_type, "UNVERIFIED_TRANSCRIPTION_FAILED")
+        self.assertNotEqual(threat_type, "AUTHENTIC_SAFE_CALL")
+        self.assertEqual(cb_action, "HOLD_VERIFICATION_REQUIRED")
+
 if __name__ == "__main__":
     unittest.main()

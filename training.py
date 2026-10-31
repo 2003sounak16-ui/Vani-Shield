@@ -105,7 +105,17 @@ def main():
         train_df = df[df["split"] == "train"].reset_index(drop=True)
         val_df = df[df["split"] == "val"].reset_index(drop=True)
     else:
-        train_df, val_df = train_test_split(df, test_size=0.25, random_state=42, stratify=df["label_idx"])
+        # Split unique recordings and speakers first to prevent identical recordings leaking across train and val
+        group_col = "speaker_id" if "speaker_id" in df.columns else "path"
+        unique_groups = df.drop_duplicates(group_col)[[group_col, "label_idx"]]
+        train_groups, val_groups = train_test_split(
+            unique_groups,
+            test_size=0.25,
+            random_state=42,
+            stratify=unique_groups["label_idx"]
+        )
+        train_df = df[df[group_col].isin(train_groups[group_col])].reset_index(drop=True)
+        val_df = df[df[group_col].isin(val_groups[group_col])].drop_duplicates("path").reset_index(drop=True)
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(args.model_name)
     model = AutoModelForAudioClassification.from_pretrained(
