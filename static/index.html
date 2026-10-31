@@ -68,9 +68,21 @@
 
 
 
-    <!-- Telemetry Status Pills -->
+    <!-- Telemetry Status & Navigation Pills -->
 
     <div class="flex items-center gap-2 text-xs font-mono">
+
+      <a href="/" class="px-2.5 py-1 rounded-full bg-blue-950/80 text-blue-300 border border-blue-700 hover:bg-blue-900 transition flex items-center gap-1.5" title="Switch to React CyberEye Dashboard">
+
+        <i class="fa-brands fa-react text-cyan-400"></i> React UI
+
+      </a>
+
+      <a href="/dashboard" class="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition flex items-center gap-1.5" title="Open Mission Control">
+
+        <i class="fa-solid fa-gauge-high text-indigo-400"></i> Mission Control
+
+      </a>
 
       <span class="px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 flex items-center gap-1.5">
 
@@ -748,7 +760,7 @@
 
     // Initialize Leaflet Map
 
-    const map = L.map('map', { zoomControl: false }).setView([22.5726, 88.3639], 5);
+    const map = L.map('map', { zoomControl: false }).setView([20.5937, 78.9629], 5);
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
 
@@ -760,29 +772,127 @@
 
     let activeMarker = null;
 
+    let activeCircle = null;
 
 
-    function setMapPin(lat, lon, label, isDanger) {
+
+    function setMapPin(lat, lon, label, isDanger, telecomInfo = null) {
 
       if (activeMarker) map.removeLayer(activeMarker);
 
+      if (activeCircle) map.removeLayer(activeCircle);
+
+
+
+      const validLat = (typeof lat === 'number' && !isNaN(lat)) ? lat : 20.5937;
+
+      const validLon = (typeof lon === 'number' && !isNaN(lon)) ? lon : 78.9629;
+
+      const validLabel = label || (isDanger ? "Scam Threat Node" : "Verified Calling Circle");
+
+
+
       const iconHtml = isDanger ?
 
-        `<div class="w-6 h-6 rounded-full bg-red-600 border-2 border-white pulse-danger flex items-center justify-center text-white text-[10px]"><i class="fa-solid fa-triangle-exclamation"></i></div>` :
+        `<div class="w-7 h-7 rounded-full bg-red-600 border-2 border-white pulse-danger shadow-lg shadow-red-500/50 flex items-center justify-center text-white text-[11px]"><i class="fa-solid fa-triangle-exclamation"></i></div>` :
 
-        `<div class="w-5 h-5 rounded-full bg-emerald-500 border-2 border-white shadow flex items-center justify-center text-white text-[8px]"><i class="fa-solid fa-check"></i></div>`;
+        `<div class="w-6 h-6 rounded-full bg-emerald-500 border-2 border-white shadow-lg shadow-emerald-500/50 flex items-center justify-center text-white text-[10px]"><i class="fa-solid fa-check"></i></div>`;
 
-      const customIcon = L.divIcon({ html: iconHtml, className: '' });
 
-      activeMarker = L.marker([lat, lon], { icon: customIcon }).addTo(map);
 
-      map.flyTo([lat, lon], isDanger ? 6 : 8, { duration: 1.5 });
+      const customIcon = L.divIcon({
 
-      document.getElementById("map-loc-label").innerText = label;
+        html: iconHtml,
+
+        className: 'custom-map-pin',
+
+        iconSize: [28, 28],
+
+        iconAnchor: [14, 14]
+
+      });
+
+
+
+      // Threat radar perimeter ring
+
+      activeCircle = L.circle([validLat, validLon], {
+
+        radius: isDanger ? 90000 : 35000,
+
+        color: isDanger ? '#ef4444' : '#10b981',
+
+        weight: 1.5,
+
+        fillColor: isDanger ? '#ef4444' : '#10b981',
+
+        fillOpacity: isDanger ? 0.22 : 0.12,
+
+        dashArray: isDanger ? '4, 4' : null
+
+      }).addTo(map);
+
+
+
+      activeMarker = L.marker([validLat, validLon], { icon: customIcon }).addTo(map);
+
+
+
+      const carrierStr = telecomInfo?.carrier || (isDanger ? 'VoIP / Virtual PBX (Spoofed)' : 'Cellular Telecom Grid');
+
+      activeMarker.bindPopup(`
+
+        <div style="font-family: ui-monospace, monospace; font-size: 11px; color: #0f172a; min-width: 175px;">
+
+          <div style="font-weight: 700; color: ${isDanger ? '#dc2626' : '#059669'}; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">
+
+            ${isDanger ? '⚠️ FLAGGED SCAMMER NODE' : '✅ VERIFIED CALLER CIRCLE'}
+
+          </div>
+
+          <div><strong>Origin:</strong> ${validLabel}</div>
+
+          <div><strong>Grid:</strong> ${validLat.toFixed(4)}°N, ${validLon.toFixed(4)}°E</div>
+
+          <div><strong>Carrier:</strong> ${carrierStr}</div>
+
+          <div style="margin-top: 4px; padding: 2px 5px; background: ${isDanger ? '#fee2e2' : '#d1fae5'}; border-radius: 4px; color: ${isDanger ? '#991b1b' : '#065f46'}; font-weight: 600;">
+
+            ${isDanger ? 'DEFENSE: CIRCUIT BREAKER ARMED' : 'DEFENSE: VERIFIED CLEAR'}
+
+          </div>
+
+        </div>
+
+      `);
+
+
+
+      map.invalidateSize();
+
+      map.flyTo([validLat, validLon], isDanger ? 6 : 7, { duration: 1.2 });
+
+      document.getElementById("map-loc-label").innerText = validLabel;
 
     }
 
-    setMapPin(12.9716, 77.5946, "Bengaluru, Karnataka", false);
+
+
+    // Ensure map tiles and dimensions calculate accurately after render
+
+    setTimeout(() => {
+
+      if (map) {
+
+        map.invalidateSize();
+
+        setMapPin(12.9716, 77.5946, "Bengaluru, Karnataka (Airtel)", false, { carrier: "Bharti Airtel Telecom" });
+
+      }
+
+    }, 250);
+
+    window.addEventListener("resize", () => { if (map) map.invalidateSize(); });
 
 
 
@@ -876,11 +986,19 @@
 
       const avatarEl = document.getElementById("caller-avatar");
 
+      const telecom = res.telecom || {};
+
+      const callerGeo = res.caller_geo || {};
+
+      const cbEngaged = Boolean((res.circuit_breaker && res.circuit_breaker.engaged) || (Number(res.unified_risk_score) >= 70.0));
+
+
+
       if (res.filename) {
 
         document.getElementById("caller-number").innerText = res.filename;
 
-        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-file-audio text-cyan-400"></i> ${res.duration_seconds}s Audio File`;
+        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-file-audio text-cyan-400"></i> ${res.duration_seconds || 3.0}s Audio File`;
 
         document.getElementById("caller-carrier").innerText = res.w2v_fake_prob >= 50.0 ? "AI Neural Voice Model" : "Authentic Human Voice";
 
@@ -888,13 +1006,13 @@
 
       } else {
 
-        document.getElementById("caller-number").innerText = res.telecom.phone_number;
+        document.getElementById("caller-number").innerText = telecom.phone_number || callerGeo.number || "+91-9830112233";
 
-        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-location-dot"></i> ${res.telecom.location}`;
+        document.getElementById("caller-loc").innerHTML = `<i class="fa-solid fa-location-dot"></i> ${telecom.location || callerGeo.city || "Bengaluru Circle"}`;
 
-        document.getElementById("caller-carrier").innerText = res.telecom.carrier;
+        document.getElementById("caller-carrier").innerText = telecom.carrier || callerGeo.carrier || "Cellular Telecom";
 
-        avatarEl.innerHTML = res.circuit_breaker.engaged ? `<i class="fa-solid fa-triangle-exclamation text-red-400"></i>` : `<i class="fa-solid fa-user text-slate-300"></i>`;
+        avatarEl.innerHTML = cbEngaged ? `<i class="fa-solid fa-triangle-exclamation text-red-400"></i>` : `<i class="fa-solid fa-user text-slate-300"></i>`;
 
       }
 
@@ -904,7 +1022,7 @@
 
       const voipBadge = document.getElementById("voip-badge");
 
-      if (res.telecom.is_voip_spoofed) {
+      if (telecom.is_voip_spoofed || callerGeo.is_scam) {
 
         voipBadge.classList.remove("hidden");
 
@@ -916,11 +1034,39 @@
 
 
 
-      // Map pin
+      // Panel 2 Threat Geolocation Pin
 
-      const coords = res.telecom.coordinates || [20.5937, 78.9629];
+      let lat = 20.5937;
 
-      setMapPin(coords[0], coords[1], res.telecom.location, res.circuit_breaker.engaged);
+      let lon = 78.9629;
+
+      let locName = telecom.location || callerGeo.city || "India Telecom Node";
+
+
+
+      if (Array.isArray(telecom.coordinates) && telecom.coordinates.length >= 2) {
+
+        lat = Number(telecom.coordinates[0]) || lat;
+
+        lon = Number(telecom.coordinates[1]) || lon;
+
+      } else if (telecom.coordinates && typeof telecom.coordinates === 'object') {
+
+        lat = Number(telecom.coordinates.lat) || lat;
+
+        lon = Number(telecom.coordinates.lon) || lon;
+
+      } else if (callerGeo.lat && callerGeo.lon) {
+
+        lat = Number(callerGeo.lat) || lat;
+
+        lon = Number(callerGeo.lon) || lon;
+
+      }
+
+
+
+      setMapPin(lat, lon, locName, cbEngaged, telecom);
 
 
 
@@ -1150,7 +1296,7 @@
 
         overlay.classList.remove("hidden");
 
-        document.getElementById("blocked-num-alert").innerText = res.telecom.phone_number || res.filename || "Suspicious Audio";
+        document.getElementById("blocked-num-alert").innerText = res.telecom?.phone_number || res.caller_geo?.number || res.filename || "Suspicious Audio Node";
 
         payBtn.disabled = true;
 

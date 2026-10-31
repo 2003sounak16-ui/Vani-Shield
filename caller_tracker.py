@@ -122,17 +122,60 @@ def lookup_carrier(phone_number: str) -> dict:
         tzs = timezone.time_zones_for_number(parsed)
         result["timezones"] = list(tzs) if tzs else ["Asia/Kolkata"]
 
+        # Optional: Numverify API key for enhanced carrier & VoIP line-type validation
+        numverify_key = os.environ.get("NUMVERIFY_API_KEY", "").strip()
+        if numverify_key and (result["carrier"].startswith("Unknown") or not result["valid"]):
+            try:
+                nv_resp = requests.get(
+                    f"http://apilayer.net/api/validate?access_key={numverify_key}&number={phone_number}",
+                    timeout=3
+                )
+                if nv_resp.status_code == 200:
+                    nv_data = nv_resp.json()
+                    if nv_data.get("valid"):
+                        result["valid"] = True
+                        if nv_data.get("carrier"):
+                            result["carrier"] = nv_data["carrier"]
+                        if nv_data.get("location"):
+                            result["location"] = nv_data["location"]
+                        if nv_data.get("line_type") == "voip":
+                            result["carrier"] = f"VoIP / Virtual SIP ({result['carrier']})"
+            except Exception:
+                pass
+
     except Exception as e:
         result["error"] = str(e)
 
     return result
 
 def get_ip_geolocation(ip_address: str = None) -> dict:
-    """Fetch geo-coordinates via IP lookup, with safe offline fallback."""
+    """Fetch geo-coordinates via IP lookup (IPInfo API with key or free ip-api.com fallback)."""
     if not ip_address or ip_address in ("127.0.0.1", "localhost", "::1"):
         # Local node fallback: New Delhi Cyber Defense Hub
         return {"city": "New Delhi", "region": "Delhi", "country": "India", "lat": 28.6139, "lon": 77.2090, "isp": "Local Test Interface"}
 
+    # Provider 1: IPInfo API (if IPINFO_API_KEY is configured in .env)
+    ipinfo_key = os.environ.get("IPINFO_API_KEY", "").strip()
+    if ipinfo_key:
+        try:
+            resp = requests.get(f"https://ipinfo.io/{ip_address}?token={ipinfo_key}", timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                loc = data.get("loc", "").split(",")
+                lat = float(loc[0]) if len(loc) == 2 else 28.6139
+                lon = float(loc[1]) if len(loc) == 2 else 77.2090
+                return {
+                    "city": data.get("city", "Unknown City"),
+                    "region": data.get("region", "Unknown Region"),
+                    "country": data.get("country", "India"),
+                    "lat": lat,
+                    "lon": lon,
+                    "isp": data.get("org", "Telecom Provider")
+                }
+        except Exception:
+            pass
+
+    # Provider 2: Free public ip-api.com fallback
     try:
         resp = requests.get(f"http://ip-api.com/json/{ip_address}?fields=status,country,regionName,city,lat,lon,isp", timeout=3)
         if resp.status_code == 200:

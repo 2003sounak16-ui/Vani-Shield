@@ -56,6 +56,36 @@
       }
     },
     {
+      "source": "/screening",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/simulator",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/console",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/dashboard",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
+      "source": "/call",
+      "destination": {
+        "service": "app"
+      }
+    },
+    {
       "source": "/(.*)",
       "destination": {
         "service": "frontend"

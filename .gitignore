@@ -56,3 +56,4 @@ data_real/
 !voice-decision-head-f32.npz
 !scammer_blacklist.json
 !audio_transcripts.json
+.vercel

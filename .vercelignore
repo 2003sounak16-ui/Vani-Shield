@@ -2,7 +2,6 @@
 results_master_unified/
 ml_pipeline/checkpoints/mobile_edge/
 ml_pipeline/manifests/
-demo_samples/
 audio/
 node_modules
 frontend/node_modules

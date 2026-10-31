@@ -83,11 +83,22 @@ export default function App() {
             }));
             setTelemetry(prev => ({ ...prev, circuit_breaker_locked: isLocked }));
           } else if (msg.type === 'TELEMETRY_FRAME') {
-            setTelemetry(prev => ({
-              ...prev,
-              ...msg,
-              caller_geo: msg.caller_geo || prev.caller_geo
-            }));
+            setTelemetry(prev => {
+              const geo = msg.caller_geo || (msg.telecom ? {
+                number: msg.telecom.phone_number || prev.caller_geo.number,
+                carrier: msg.telecom.carrier || prev.caller_geo.carrier,
+                city: msg.telecom.location || prev.caller_geo.city,
+                lat: Array.isArray(msg.telecom.coordinates) ? msg.telecom.coordinates[0] : (msg.telecom.coordinates?.lat || prev.caller_geo.lat),
+                lon: Array.isArray(msg.telecom.coordinates) ? msg.telecom.coordinates[1] : (msg.telecom.coordinates?.lon || prev.caller_geo.lon),
+                is_scam: Boolean(msg.telecom.is_voip_spoofed || msg.circuit_breaker_locked)
+              } : prev.caller_geo);
+
+              return {
+                ...prev,
+                ...msg,
+                caller_geo: geo
+              };
+            });
             if (msg.circuit_breaker_locked) {
               setBankingState({
                 locked: true,
@@ -252,18 +263,35 @@ export default function App() {
           </div>
         </div>
 
-        {/* Telemetry Hardware Badges */}
-        <div className="flex items-center space-x-3 text-xs">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0b0f19] border border-gray-800 rounded-lg">
+        {/* Navigation & Telemetry Badges */}
+        <div className="flex items-center space-x-2.5 text-xs">
+          <a
+            href="/screening"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-900/40 hover:bg-blue-800/60 border border-blue-500/40 rounded-lg text-blue-300 font-medium transition"
+            title="Open Live Forensic Screening Console"
+          >
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+            <span>Live Screening Console</span>
+          </a>
+
+          <a
+            href="/dashboard"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded-lg text-gray-300 transition"
+            title="Open Mission Control Telemetry"
+          >
+            <span>Mission Control</span>
+          </a>
+
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[#0b0f19] border border-gray-800 rounded-lg">
             <Cpu className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-gray-400">GPU:</span>
-            <span className="text-white font-mono font-medium">RTX 3050 (FP16)</span>
+            <span className="text-white font-mono font-medium">RTX 3050</span>
           </div>
 
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0b0f19] border border-gray-800 rounded-lg">
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-[#0b0f19] border border-gray-800 rounded-lg">
             <Radio className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="text-gray-400">Jev-Omni 12B:</span>
-            <span className="text-cyan-300 font-mono font-medium">Port 9931</span>
+            <span className="text-gray-400">Jev-Omni:</span>
+            <span className="text-cyan-300 font-mono font-medium">9931</span>
           </div>
 
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0b0f19] border border-gray-800 rounded-lg">
