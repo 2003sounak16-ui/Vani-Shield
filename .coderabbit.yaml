@@ -7,13 +7,13 @@ reviews:
   request_changes_workflow: false
   high_level_summary: true
   poem: false
-  review_status: false
+  review_status: true
   collapse_walkthrough: false
   auto_review:
     enabled: true
-    drafts: false
+    drafts: true
     base_branches:
-      - "main"
+      - ".*"
   path_filters:
     - "!**/*.csv"
     - "!**/*.json"
@@ -21,26 +21,29 @@ reviews:
     - "!**/*.mpeg"
     - "!**/*.mp4"
     - "!**/*.wav"
+    - "!**/*.pt"
+    - "!**/*.npz"
     - "!**/audio/**"
+    - "!**/demo_samples/**"
     - "!**/data_demo/**"
     - "!**/test_multilingual_calls/**"
   path_instructions:
-    - path: "vanishield_engine.py"
+    - path: "**/vanishield_engine.py"
       instructions: |
         Focus on sub-second audio forensic inference latency (<500ms SLA),
         numerical stability in Wav2Vec 2.0 multi-window sliding aggregation,
         accuracy of physical DSP glottal acoustics (F0, spectral flatness, centroid),
         and prevention of false positives on WhatsApp PTT edge clicks.
-    - path: "app.py"
+    - path: "backend/**"
       instructions: |
         Focus on API security, safe audio byte decoding in volatile RAM,
         WebSocket concurrency & exception handling, and automated banking
         circuit breaker triggers.
-    - path: "ephemeral_buffer.py"
+    - path: "**/ephemeral_buffer.py"
       instructions: |
         Verify strict in-memory ring buffer constraints under India's DPDP Act 2023
         (zero persistent disk storage of raw voice payloads, thread-safe memory cleanup).
-    - path: "static/index.html"
+    - path: "frontend/**"
       instructions: |
         Review frontend responsiveness, WebSocket reconnection resiliency,
         Leaflet.js map state sanitization, and clean gauge animation rendering.
