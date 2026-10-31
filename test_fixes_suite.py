@@ -7,12 +7,19 @@ import time
 from unittest.mock import MagicMock
 
 # Ensure repo root is on sys.path
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_curr_dir = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(_curr_dir) if os.path.basename(_curr_dir) == "tests" else _curr_dir
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+_ml_dir = os.path.join(PROJECT_ROOT, "ml_pipeline")
+if _ml_dir not in sys.path:
+    sys.path.insert(0, _ml_dir)
 
 from ephemeral_buffer import EphemeralRAMBuffer, hash_caller_identity
-from build_robust_manifest import make_split
+try:
+    from build_robust_manifest import make_split
+except ImportError:
+    from ml_pipeline.build_robust_manifest import make_split
 
 class TestVaniShieldFixes(unittest.TestCase):
 

@@ -21,6 +21,7 @@ from backend.api.evaluate import router as evaluate_router
 from backend.api.ws_stream import router as ws_router
 from backend.api.banking_hold import router as banking_router
 from backend.engine.caller_tracker import load_blacklist
+from backend.engine.mobile_edge_engine import mobile_engine
 
 app = FastAPI(
     title="VaniShield AI Backend",
@@ -51,6 +52,16 @@ app.add_middleware(
 app.include_router(evaluate_router)
 app.include_router(ws_router)
 app.include_router(banking_router)
+
+# Mount audio evaluation, simulation, and speech routes from backend.app_demo
+try:
+    from backend.app_demo import app as demo_app
+    existing_paths = {r.path for r in app.routes}
+    for r in demo_app.routes:
+        if r.path not in existing_paths and r.path not in ["/openapi.json", "/docs", "/redoc"]:
+            app.routes.append(r)
+except Exception:
+    pass
 
 @app.get("/health")
 async def health_check():
@@ -85,6 +96,20 @@ async def get_blacklisted_scammers():
         entry["phone_masked"] = masked_key
         sanitized[masked_key] = entry
     return {"count": len(sanitized), "scammers": sanitized}
+
+@app.get("/api/engine/mobile-status")
+async def get_mobile_engine_status():
+    """Returns Mobile Edge Engine status, active ONNX provider, and memory footprint."""
+    model_loaded = mobile_engine.ort_session is not None
+    return {
+        "mode": "mobile_edge_optimized",
+        "onnx_model_loaded": model_loaded,
+        "active_provider": mobile_engine.active_provider,
+        "model_file": os.path.basename(mobile_engine.model_path) if mobile_engine.model_path else "None",
+        "quantization": "INT8" if mobile_engine.model_path and "int8" in mobile_engine.model_path else "FP32",
+        "estimated_ram_mb": 91.0 if model_loaded else 15.0,
+        "target_platforms": ["Android (NNAPI / Qualcomm QNN)", "iOS (CoreML)", "Edge Linux / ARM64"]
+    }
 
 # Mount static web UI if available
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
