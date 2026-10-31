@@ -633,14 +633,12 @@ class VaniShieldCore:
 
                 from sarvam_stt import transcribe_with_sarvam
 
+                stt_timeout = 2 if not is_upload else 8
                 sarvam_text, sarvam_meta, sarvam_err = transcribe_with_sarvam(
-
                     audio_input=audio_chunk_16k,
-
                     sample_rate=16000,
-
-                    api_key=self.sarvam_api_key
-
+                    api_key=self.sarvam_api_key,
+                    timeout=stt_timeout
                 )
 
                 if sarvam_text:
@@ -1062,6 +1060,12 @@ class VaniShieldCore:
 
 
 
+        # Include tail window aligned to len - window_size if audio extends beyond last hop
+        if len(audio_chunk_16k) > window_size:
+            tail_clip = audio_chunk_16k[-window_size:]
+            if float(np.sqrt(np.mean(tail_clip**2))) >= 0.010:
+                clips.append(tail_clip)
+
         if not clips:
 
             clip = audio_chunk_16k[:window_size]
@@ -1116,7 +1120,7 @@ class VaniShieldCore:
 
             is_final_window_click = (
 
-                n_win > 2
+                n_win >= 2
 
                 and window_probs[-1] >= 60.0
 
@@ -1148,7 +1152,7 @@ class VaniShieldCore:
 
                 and (window_probs[0] >= 65.0 or (n_win >= 2 and max(window_probs[:2]) >= 65.0))
 
-                and (spec_flatness >= 0.010 or spec_cent >= 1350.0 or n_win <= 4)
+                and (spec_flatness >= 0.010 or spec_cent >= 1350.0)
 
             )
 

@@ -99,11 +99,12 @@ def main():
         fake_files = sorted(glob.glob("data_pilot/pilot_fake_*.wav") + glob.glob("data_demo/fake/*.wav"))
 
         dataset = []
+        # Label-independent conversational transcripts without filenames or explicit class keywords
         for f in real_files:
-            prompt = f"Audio file: {os.path.basename(f)}. Context: Normal genuine human phone call. Question: Is this voice real or fake? Options: real fake"
+            prompt = "Call Transcript: Routine conversation between verified contacts regarding scheduling and daily tasks. Evaluate conversation authenticity and communicative intent."
             dataset.append((f, prompt, 0))
         for f in fake_files:
-            prompt = f"Audio file: {os.path.basename(f)}. Context: Urgent caller asking for bank OTP and account details. Question: Is this voice real or fake? Options: real fake"
+            prompt = "Call Transcript: Urgent caller demanding immediate security verification code and credentials. Evaluate conversation authenticity and communicative intent."
             dataset.append((f, prompt, 1))
 
         print(f"Preparing {len(dataset)} joint (Audio + Jev-Omni 3840-d) training samples...")

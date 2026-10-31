@@ -1,10 +1,14 @@
 {
-  "+911409988776": {
+  "ed8a9d1418a4802f": {
+    "caller_hash": "ed8a9d1418a4802f",
+    "phone_masked": "+9114****8776",
     "location": "Unknown Region",
     "carrier": "Virtual VoIP Gateway",
+    "lat": 28.6139,
+    "lon": 77.209,
     "timestamp": "2026-10-31 06:22:30",
     "risk_score": 100.0,
-    "reason": "BLACKLISTED_SCAMMER: Urgent security notice from State Bank of India fraud team. Your account has an illegal debit of 65,000 rupees. Share your 6-digit OTP and CVV right now to reverse it.",
+    "reason": "Vishing / Urgent SBI OTP solicitation",
     "action": "BANKING_AND_UPI_LOCKED"
   }
 }

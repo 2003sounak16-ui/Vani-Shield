@@ -55,7 +55,7 @@ def transcribe_with_sarvam(
     api_key: Optional[str] = None,
     model: str = DEFAULT_SARVAM_MODEL,
     language_code: str = "unknown",
-    timeout: int = 15
+    timeout: int = 5
 ) -> Tuple[str, Dict[str, Any], Optional[str]]:
     """
     Transcribes audio using Sarvam AI's Saaras speech-to-text API.

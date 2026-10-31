@@ -77,8 +77,8 @@ $$\text{Risk}_{\text{unified}} = 0.55 \cdot \text{Acoustic}_{\text{clone}} + 0.4
 ## 4. Privacy & Regulatory Compliance (DPDP Act 2023)
 VaniShield AI strictly enforces India's **Digital Personal Data Protection (DPDP) Act 2023**:
 1. **Zero Raw Audio Persistence**: Raw voice recordings are processed strictly inside volatile memory (`EphemeralRAMBuffer`). No temporary audio files are written to disk during live call monitoring.
-2. **Auto-Eviction SLA**: In-memory ring buffer chunks automatically expire and are purged from volatile RAM within 4.0 seconds.
-3. **Caller Pseudonymization**: Caller phone numbers are anonymized using HMAC-SHA256 (`hash_caller_identity`). Raw transcripts are stripped before persistent threat records are saved.
+2. **Auto-Eviction SLA**: In-memory ring buffer chunks automatically expire after a configurable retention window (default 4.0s) and are purged periodically from volatile RAM.
+3. **Caller Pseudonymization**: Caller identities are anonymized using keyed HMAC-SHA256 (`hash_caller_identity`) and keyed under pseudonymous hashes in blacklist storage. Raw phone numbers and conversation transcripts are stripped before persistent threat records are saved.
 4. **Thread-Safe Atomic Storage**: Blacklist operations utilize mutual exclusion locks and atomic file replacement to prevent data corruption.
 
 ---

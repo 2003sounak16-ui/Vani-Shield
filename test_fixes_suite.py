@@ -173,5 +173,73 @@ class TestVaniShieldFixes(unittest.TestCase):
         self.assertIn("transcription_error", result)
         self.assertEqual(result["transcription_error"], "ASR model timeout / inference crash")
 
+    def test_caller_tracker_pseudonymization(self):
+        """Verify caller_tracker uses HMAC-SHA256, masks phone numbers, and keys records by hash."""
+        from backend.engine.caller_tracker import hash_caller_identity, mask_phone, mark_scammer, is_blacklisted, load_blacklist
+        import tempfile
+
+        test_phone = "+919988776655"
+        h = hash_caller_identity(test_phone)
+        self.assertEqual(len(h), 16, "HMAC-SHA256 hash must be 16 hex chars")
+        self.assertEqual(mask_phone(test_phone), "+919****6655")
+
+        # Isolated blacklist file
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+            temp_bl = tf.name
+
+        try:
+            import backend.engine.caller_tracker as ct
+            old_bl = ct.BLACKLIST_PATH
+            ct.BLACKLIST_PATH = temp_bl
+
+            rec = ct.mark_scammer(test_phone, 95.0, "Critical Bank Fraud Scam Demand")
+            self.assertEqual(rec["caller_hash"], h)
+            self.assertEqual(rec["phone_masked"], "+919****6655")
+            self.assertNotIn(test_phone, rec, "Raw phone number must NOT be in persisted record")
+
+            # Verify saved JSON is keyed by hash, not raw phone
+            saved_bl = ct.load_blacklist()
+            self.assertIn(h, saved_bl, "Blacklist must be keyed by caller_hash")
+            self.assertNotIn(test_phone, saved_bl, "Raw phone number must NOT be a top-level key")
+
+            # Verify is_blacklisted resolves via HMAC hash
+            is_bl, bl_data = ct.is_blacklisted(test_phone)
+            self.assertTrue(is_bl)
+            self.assertEqual(bl_data["caller_hash"], h)
+
+        finally:
+            ct.BLACKLIST_PATH = old_bl
+            if os.path.exists(temp_bl):
+                os.remove(temp_bl)
+
+    def test_banking_unlock_pin_validation(self):
+        """Verify banking circuit breaker requires valid PIN and rejects missing/invalid PIN."""
+        import asyncio
+        from backend.api.banking_hold import unlock_banking, UnlockRequest, state
+        from fastapi import HTTPException
+        from pydantic import ValidationError
+
+        # Set locked state
+        state.locked = True
+
+        # 1. Missing pin must fail Pydantic validation (cannot pass empty {})
+        with self.assertRaises(ValidationError):
+            UnlockRequest()
+
+        # 2. Invalid PIN must raise HTTPException(403)
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                loop.run_until_complete(unlock_banking(UnlockRequest(pin="0000")))
+            self.assertEqual(ctx.exception.status_code, 403)
+            self.assertTrue(state.locked)
+
+            # 3. Correct PIN releases hold
+            res = loop.run_until_complete(unlock_banking(UnlockRequest(pin="1234")))
+            self.assertEqual(res["status"], "ACTIVE")
+            self.assertFalse(state.locked)
+        finally:
+            loop.close()
+
 if __name__ == "__main__":
     unittest.main()

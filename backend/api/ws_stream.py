@@ -72,7 +72,7 @@ async def websocket_live_call(websocket: WebSocket):
                         banking_state.locked = True
                         banking_state.risk_score = eval_result.get("unified_risk_score", 95.0)
                         banking_state.reason = f"Automated Defense: {eval_result.get('threat_type', 'Scam detected')}"
-                        mark_scammer(caller_num, banking_state.risk_score, eval_result.get("transcript", ""))
+                        mark_scammer(caller_num, banking_state.risk_score, "High-Risk AI Voice Clone & Social Engineering")
 
                     payload = {
                         "type": "TELEMETRY_FRAME",
@@ -120,7 +120,7 @@ async def websocket_live_call(websocket: WebSocket):
                             banking_state.locked = True
                             banking_state.risk_score = sc["risk"]
                             banking_state.reason = f"Automated Defense: High Risk Voice Clone ({sc['risk']}%) detected on live call."
-                            mark_scammer(caller_num, sc["risk"], sc["text"])
+                            mark_scammer(caller_num, sc["risk"], "Simulated Banking / OTP Vishing Attack")
 
                         payload = {
                             "type": "TELEMETRY_FRAME",
@@ -188,7 +188,7 @@ async def websocket_live_call(websocket: WebSocket):
                                 banking_state.locked = True
                                 banking_state.risk_score = eval_res.get("unified_risk_score", 95.0)
                                 banking_state.reason = eval_res.get("threat_type", "Scam detected")
-                                mark_scammer(caller_num, banking_state.risk_score, eval_res.get("transcript", ""))
+                                mark_scammer(caller_num, banking_state.risk_score, eval_res.get("threat_type", "Scam detected"))
 
                     duration = ephemeral_buffer.get_buffer_duration(session_id)
                     await websocket.send_text(json.dumps({

@@ -195,17 +195,16 @@ def synthesize_with_fallback(
             return buf.getvalue()
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            loop = None
 
-        if loop.is_running():
+        if loop is not None and loop.is_running():
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 audio_bytes = pool.submit(asyncio.run, _edge_gen()).result()
         else:
-            audio_bytes = loop.run_until_complete(_edge_gen())
+            audio_bytes = asyncio.run(_edge_gen())
 
         metadata = {
             "voice_id": voice,
