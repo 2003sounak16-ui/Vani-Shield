@@ -1,0 +1,29 @@
+# ==============================================================================
+# Project VaniShield AI — Mobile Edge / Gateway Dependencies
+#
+# DEPLOYMENT TARGET:
+# - Minimalist Edge Node, Mobile Gateway, or Lightweight Thin Server
+# - Footprint: ~120 MB RAM / Zero PyTorch or CUDA dependencies
+# - Platform: Android (Termux/Chaquopy), Raspberry Pi, Edge Linux, Windows/macOS
+#
+# Installation:
+#     pip install -r requirements-edge.txt
+# ==============================================================================
+
+# --- ONNX Runtime Engine (Fix 3: Hardware NPU/CPU Acceleration) ---
+onnxruntime>=1.18.0
+numpy>=1.26.0
+scipy>=1.12.0
+soundfile>=0.12.1
+
+# --- Streaming API Server (FastAPI + WebSocket) ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+websockets>=12.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+
+# --- Telecom & Network Verification ---
+phonenumbers>=8.13.0
+requests>=2.31.0

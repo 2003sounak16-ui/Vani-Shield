@@ -1,6 +1,18 @@
 # ==============================================================================
 # Project VaniShield AI — Unified Production Dependencies
-# Target Environment: Windows 11 / Python 3.11 / NVIDIA RTX 3050 (CUDA 11.8)
+#
+# DEPLOYMENT TARGETS:
+# 1. Primary Cloud Streaming Server:
+#    - OS: Linux (Ubuntu 22.04 LTS / Debian 12 / Docker) or Windows Server 2022
+#    - Python: 3.10 / 3.11 (64-bit)
+#    - Acceleration: NVIDIA GPU (CUDA 11.8 / 12.1) or High-Core Cloud CPU
+#    - Cloud Platforms: AWS EC2 (g4dn.xlarge), GCP Compute, RunPod, Railway, Azure
+#    - Installation:
+#        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#        pip install -r requirements.txt
+#
+# 2. Edge Gateway / Mobile Client Mode (No heavy PyTorch needed):
+#    - See requirements-edge.txt for ultra-lightweight ONNX-only runtime (~120MB)
 # ==============================================================================
 
 # --- Pillar 1: Acoustic Deepfake Forensics & Neural Vocoder Detection ---
@@ -12,13 +24,13 @@ huggingface-hub>=0.24.0
 datasets>=2.20.0
 kagglehub>=0.2.0
 
-# --- Pillar 2 & 8: Edge Optimization & Quantization ---
+# --- Pillar 2 & 8: Edge Optimization, ONNX Runtime & Quantization ---
 onnx>=1.16.0
 onnxruntime>=1.18.0
 
 # --- Pillar 3: Speech Recognition (STT / ASR) & Scam Keyword Spotting ---
-# Sarvam AI Indic STT (Saaras API) communicates via robust direct REST requests
-# Faster-Whisper provides high-performance offline CPU fallback
+# Sarvam AI Indic STT (Saaras API) communicates via direct REST requests
+# Faster-Whisper provides high-performance local offline CPU fallback
 faster-whisper>=1.0.0
 
 # --- Pillar 4: Biometrics, Voiceprints & Prosodic DSP ---
@@ -27,19 +39,24 @@ faiss-cpu>=1.8.0
 soundfile>=0.12.1
 librosa>=0.10.2
 praat-parselmouth>=0.4.3
+av>=11.0.0
 
 # --- Pillar 5: Telecom Intelligence & Geolocation ---
 phonenumbers>=8.13.0
 requests>=2.31.0
+httpx>=0.27.0
 beautifulsoup4>=4.12.0
 
-# --- Pillar 6: Streaming Backend & Privacy Layer ---
+# --- Pillar 6: Streaming Backend, Production ASGI Server & Privacy Layer ---
 fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
+gunicorn>=21.2.0; sys_platform != 'win32'
 python-multipart>=0.0.9
+python-dotenv>=1.0.0
 websockets>=12.0
 pydantic>=2.7.0
 redis>=5.0.0
+psutil>=5.9.0
 
 # --- Pillar 7 & Utilities: Synthetic Voice Generation (TTS) & Data Science ---
 # ElevenLabs API communicates via direct REST endpoints with custom voice IDs
@@ -48,5 +65,6 @@ edge-tts>=7.0.0
 numpy>=1.26.0
 scipy>=1.12.0
 scikit-learn>=1.4.0
-sounddevice>=0.4.6
+sounddevice>=0.4.6; sys_platform == 'win32' or sys_platform == 'darwin'
 pandas>=2.2.0
+tqdm>=4.66.0
