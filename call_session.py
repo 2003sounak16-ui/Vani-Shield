@@ -716,6 +716,18 @@ class SessionRegistry:
             logger.info("Reaped %d idle call session(s).", reaped)
         return reaped
 
+    def all(self) -> list:
+        """
+        Snapshot of the live sessions, for an operator view that needs to pick
+        one to watch.
+
+        Returns a list copied under the lock rather than a view of the map, so
+        a caller can iterate it while calls start and end underneath.
+        """
+        with self._lock:
+            return list(self._sessions.values())
+
+
     def active_count(self) -> int:
         with self._lock:
             return len(self._sessions)
