@@ -77,28 +77,24 @@ MAX_TTS_PER_IP_PER_MINUTE = 5
 
 def check_tts_access(request: Request, body_token: Optional[str] = None) -> None:
     """Verify authorization before allowing speech synthesis via paid ElevenLabs quota."""
-    try:
-        from elevenlabs_tts import is_elevenlabs_available
-        has_elevenlabs = is_elevenlabs_available()
-    except Exception:
-        has_elevenlabs = bool(os.environ.get("ELEVENLABS_API_KEY"))
+    expected = (
+        os.environ.get("TTS_ACCESS_TOKEN", "").strip()
+        or os.environ.get("VANISHIELD_API_KEY", "").strip()
+        or os.environ.get("VANISHIELD_BANKING_PIN", "").strip()
+        or os.environ.get("VANISHIELD_UNLOCK_PIN", "").strip()
+        or "1234"
+    )
 
-    expected = os.environ.get("TTS_ACCESS_TOKEN", "").strip()
-    if has_elevenlabs and not expected:
-        expected = os.environ.get("VANISHIELD_API_KEY", os.environ.get("VANISHIELD_BANKING_PIN", os.environ.get("VANISHIELD_UNLOCK_PIN", "1234"))).strip()
-
-    if expected or has_elevenlabs:
-        target_token = expected or "1234"
-        provided = (
-            request.headers.get("X-TTS-Token")
-            or request.headers.get("Authorization", "").replace("Bearer ", "")
-            or (body_token or "")
-        ).strip()
-        if not provided or not hmac.compare_digest(provided, target_token):
-            raise HTTPException(
-                status_code=401,
-                detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
-            )
+    provided = (
+        request.headers.get("X-TTS-Token")
+        or request.headers.get("Authorization", "").replace("Bearer ", "")
+        or (body_token or "")
+    ).strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="TTS endpoint requires authorization (valid X-TTS-Token header or access_token)."
+        )
 
 def check_tts_budget_and_length(text: str, request: Request = None) -> None:
     """Enforces text bounds and rate/budget limits before invoking paid voice providers."""
