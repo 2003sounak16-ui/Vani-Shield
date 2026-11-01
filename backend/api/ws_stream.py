@@ -11,6 +11,7 @@ import time
 import base64
 import asyncio
 import numpy as np
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 # Import banking state for auto circuit breaker
@@ -28,11 +29,27 @@ from backend.engine.caller_tracker import lookup_carrier, mark_scammer, get_ip_g
 
 try:
     from vanishield_engine import core_engine
-except ImportError:
+    _ENGINE_SOURCE = "vanishield_engine (root)"
+except ImportError as _root_err:
+    # Loud, not silent. These two modules have diverged: the root engine
+    # carries the social-engineering stage pillar, the fusion and demo mode;
+    # backend/engine/vanishield_engine.py carries none of them. Falling back
+    # therefore does not degrade gracefully - it swaps the detector for one
+    # that cannot detect a scam script at all. A deployment must never do
+    # that quietly, so the reason is logged at error level and the active
+    # source is reported on /health.
+    logging.getLogger(__name__).error(
+        "Root vanishield_engine failed to import (%s); falling back to "
+        "backend.engine.vanishield_engine, which has NO scam-stage pillar. "
+        "Scam-script detection is unavailable in this process.",
+        _root_err,
+    )
     try:
         from backend.engine.vanishield_engine import core_engine
+        _ENGINE_SOURCE = "backend.engine.vanishield_engine (FALLBACK - no stage pillar)"
     except ImportError:
         core_engine = None
+        _ENGINE_SOURCE = "unavailable"
 
 router = APIRouter(tags=["Live WebSocket Stream"])
 ephemeral_buffer = EphemeralRAMBuffer(max_duration_sec=4.0, sample_rate=16000)
